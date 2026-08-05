@@ -1,26 +1,64 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f3f6f8;
+  --foreground: #17202a;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  --color-ink: #17202a;
+  --color-accent: #2563eb;
+  --color-paper: #ffffff;
+  --color-surface: #f8fafc;
+  --color-field: #ffffff;
+  --color-accent-soft: #eff6ff;
+  --color-line: color-mix(in srgb, var(--color-ink) 18%, transparent);
+  --color-muted: color-mix(in srgb, var(--color-ink) 62%, white);
+  --color-success: #15803d;
+  --color-warning: #b45309;
+  --color-danger: #b91c1c;
+  --color-unknown: #64748b;
+
+  --font-heading: "Basel Classics", "Basel Grotesk", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Basel Grotesk", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/*
+  Basel Classics (headings) and Basel Grotesk (body) are licensed fonts and
+  aren't bundled with this project. Drop the licensed .woff2 files in
+  /public/fonts and register them below to activate — everything already
+  points at these font-family names via --font-heading / --font-body, so no
+  other changes are needed once the files are in place.
+
+  @font-face {
+    font-family: "Basel Classics";
+    src: url("/fonts/BaselClassics-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
   }
-}
+
+  @font-face {
+    font-family: "Basel Grotesk";
+    src: url("/fonts/BaselGrotesk-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+*/
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-body);
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-ink);
 }
