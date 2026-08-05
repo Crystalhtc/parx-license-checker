@@ -1,4 +1,5 @@
-import { chromium } from "playwright";
+import serverlessChromium from "@sparticuz/chromium";
+import { chromium as playwrightCoreChromium, type Browser } from "playwright-core";
 import { resolveInstitutionConfig } from "./institutionConfig";
 
 type CpsbcInput = {
@@ -26,6 +27,23 @@ type CpsbcResult = {
     profileUrl?: string;
   }>;
 };
+
+function isServerlessRuntime() {
+  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+async function launchBrowser(): Promise<Browser> {
+  if (isServerlessRuntime()) {
+    return playwrightCoreChromium.launch({
+      args: serverlessChromium.args,
+      executablePath: await serverlessChromium.executablePath(),
+      headless: true,
+    });
+  }
+
+  const { chromium } = await import("playwright");
+  return chromium.launch({ headless: true });
+}
 
 export function resolveCpssoSearchUrl(searchTerm: string) {
   const trimmedTerm = searchTerm.trim();
@@ -89,7 +107,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
     };
   }
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchBrowser();
   const page = await browser.newPage();
 
   try {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyCpsbc } from "@/lib/cpsbcAdapter";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -10,7 +11,7 @@ export async function POST(request: NextRequest) {
 
   if (!searchTerm || typeof searchTerm !== "string" || !searchTerm.trim()) {
     return NextResponse.json(
-      { error: "A last name or city is required." },
+      { error: "A search term is required." },
       { status: 400 }
     );
   }
