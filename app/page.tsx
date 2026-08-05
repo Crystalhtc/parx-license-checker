@@ -298,11 +298,13 @@ export default function Home() {
         <aside className="min-w-0 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:pr-1">
           <form onSubmit={handleSubmit} className="space-y-8">
             <div>
-              <p className="mb-5 inline-flex rounded-full bg-accent-soft px-4 py-2 text-sm font-black uppercase text-accent">
+              <p className="mb-5 inline-flex rounded-full bg-accent-soft px-4 py-2 text-sm font-black text-accent">
                 PaRx
               </p>
               <h1 className="font-heading mb-8 text-4xl font-black leading-[0.95] text-ink sm:text-5xl">
-                License
+                Prescriber
+                <br />
+                Licence
                 <br />
                 Checker
               </h1>
