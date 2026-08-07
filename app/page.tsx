@@ -171,6 +171,20 @@ function Spinner() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 2.5v7M5.25 7.25 8 10l2.75-2.75M3 13.5h10"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function RegistryOption({
   institutionKey,
   checked,
@@ -241,6 +255,8 @@ export default function Home() {
   const [institution, setInstitution] = useState<InstitutionKey>("cpsbc");
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [downloadingPdfKey, setDownloadingPdfKey] = useState<string | null>(null);
+  const [submittedSearchTerm, setSubmittedSearchTerm] = useState("");
 
   const institutionConfig = resolveInstitutionConfig(institution);
   const institutionMeta = INSTITUTION_META[institution];
@@ -258,8 +274,11 @@ export default function Home() {
   });
 
   async function checkRegistry() {
+    const submittedTerm = searchTerm.trim();
+
     setLoading(true);
     setResult(null);
+    setSubmittedSearchTerm(submittedTerm);
 
     try {
       const response = await fetch("/api/verify-cpsbc", {
@@ -267,7 +286,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ searchTerm, institution }),
+        body: JSON.stringify({ searchTerm: submittedTerm, institution }),
       });
 
       const data = await response.json();
@@ -286,6 +305,49 @@ export default function Home() {
     event.preventDefault();
     if (!searchTerm.trim() || loading) return;
     void checkRegistry();
+  }
+
+  async function downloadCpsbcPdf(item: ResultItem, index: number) {
+    if (!item.profileUrl) return;
+
+    const downloadKey = `${item.fullName}-${index}`;
+    setDownloadingPdfKey(downloadKey);
+
+    try {
+      const response = await fetch("/api/download-cpsbc-pdf", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profileUrl: item.profileUrl,
+          fullName: item.fullName,
+          searchTerm: submittedSearchTerm || searchTerm.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || "Unable to download CPSBC PDF.");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${item.fullName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "cpsbc-result"}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setResult({
+        outcome: "error",
+        notes: "The CPSBC PDF could not be downloaded. Please try again.",
+      });
+    } finally {
+      setDownloadingPdfKey(null);
+    }
   }
 
   const outcomeMeta = result ? OUTCOME_META[result.outcome] : null;
@@ -336,6 +398,7 @@ export default function Home() {
                       onChange={() => {
                         setInstitution(key);
                         setSearchTerm("");
+                        setSubmittedSearchTerm("");
                         setResult(null);
                       }}
                     />
@@ -438,10 +501,7 @@ export default function Home() {
                           ? "Practice discipline"
                           : "Practice type";
                     const hidePractice = institutionConfig.label === "CPSO" && !item.practiceType;
-                    const profileLinkLabel =
-                      institutionConfig.key === "cpsbc"
-                        ? `Open ${institutionConfig.label} directory page`
-                        : `Open ${institutionConfig.label} result page`;
+                    const itemKey = `${item.fullName}-${index}`;
 
                     return (
                       <article
@@ -462,14 +522,38 @@ export default function Home() {
                           {!hidePractice && <DetailBlock label={practiceLabel} value={item.practiceType} />}
                         </dl>
 
-                        {item.profileUrl && (
+                        {item.profileUrl && institutionConfig.key === "cpsbc" && (
+                          <div className="flex flex-wrap gap-3">
+                            <button
+                              type="button"
+                              onClick={() => void downloadCpsbcPdf(item, index)}
+                              disabled={downloadingPdfKey === itemKey}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {downloadingPdfKey === itemKey && <Spinner />}
+                              {downloadingPdfKey === itemKey ? "Downloading PDF..." : "Download CPSBC result PDF"}
+                              {downloadingPdfKey !== itemKey && <DownloadIcon />}
+                            </button>
+                            <a
+                              href="https://www.cpsbc.ca/directory"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-field px-4 py-2 text-sm font-black text-ink transition hover:border-accent/50 hover:bg-accent-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+                            >
+                              Open CPSBC directory page
+                              <span aria-hidden="true">↗</span>
+                            </a>
+                          </div>
+                        )}
+
+                        {item.profileUrl && institutionConfig.key !== "cpsbc" && (
                           <a
                             href={item.profileUrl}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
                           >
-                            {profileLinkLabel}
+                            Open {institutionConfig.label} result page
                             <span aria-hidden="true">↗</span>
                           </a>
                         )}

@@ -32,7 +32,7 @@ function isServerlessRuntime() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 }
 
-async function launchBrowser(): Promise<Browser> {
+export async function launchBrowser(): Promise<Browser> {
   if (isServerlessRuntime()) {
     return playwrightCoreChromium.launch({
       args: serverlessChromium.args,
@@ -305,12 +305,6 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
 
       if (normalizedResults.length === 1) {
         cpsaSourceUrl = normalizedResults[0].profileUrl || cpsaSourceUrl;
-      }
-    }
-
-    if (institutionConfig.key === "cpsbc") {
-      for (const result of normalizedResults) {
-        result.profileUrl = institutionConfig.baseUrl;
       }
     }
 
