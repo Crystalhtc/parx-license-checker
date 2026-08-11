@@ -18,6 +18,7 @@ function toSafePdfFilename(value: unknown) {
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const searchTerm = typeof body.searchTerm === "string" ? body.searchTerm.trim() : "";
+  const firstName = typeof body.firstName === "string" ? body.firstName.trim() : "";
   const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
 
   if (!searchTerm) {
@@ -39,6 +40,15 @@ export async function POST(request: NextRequest) {
     await searchInput.fill(searchTerm);
     await searchInput.press("Enter");
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+
+    if (firstName) {
+      const firstNameInput = page.getByRole("textbox", { name: "Licensee First Name" });
+      await firstNameInput.waitFor({ state: "visible", timeout: 15000 });
+      await firstNameInput.click();
+      await firstNameInput.fill(firstName);
+      await page.getByRole("button", { name: "Search", exact: true }).click();
+      await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+    }
 
     const escapedFullName = fullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const resultLink = fullName

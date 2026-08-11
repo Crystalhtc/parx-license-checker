@@ -7,25 +7,22 @@ const INSTITUTIONS: InstitutionKey[] = ["cpsbc", "cpso", "cpsa"];
 
 const INSTITUTION_META: Record<
   InstitutionKey,
-  { fullName: string; province: string; searchBy: string; sample: string }
+  { fullName: string; province: string; searchBy: string }
 > = {
   cpsbc: {
     fullName: "College of Physicians and Surgeons of British Columbia",
     province: "British Columbia",
     searchBy: "Last name",
-    sample: "Example: Lee",
   },
   cpso: {
     fullName: "College of Physicians and Surgeons of Ontario",
     province: "Ontario",
     searchBy: "CPSO number",
-    sample: "Example: 123456",
   },
   cpsa: {
     fullName: "College of Physicians and Surgeons of Alberta",
     province: "Alberta",
     searchBy: "Last name",
-    sample: "Example: Smith",
   },
 };
 
@@ -154,7 +151,7 @@ function StatusBadge({ status }: { status?: string }) {
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-black uppercase shadow-sm ${tone.className}`}
+      className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-left text-xs font-black uppercase shadow-sm ${tone.className}`}
     >
       <StatusIcon type={tone.icon} />
       {tone.label}
@@ -178,6 +175,20 @@ function DownloadIcon() {
         d="M8 2.5v7M5.25 7.25 8 10l2.75-2.75M3 13.5h10"
         stroke="currentColor"
         strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function BackIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M10 3.5 5.5 8l4.5 4.5"
+        stroke="currentColor"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -215,7 +226,7 @@ function RegistryOption({
           name="institution"
           checked={checked}
           onChange={onChange}
-          className="peer absolute inset-0 cursor-pointer opacity-0"
+          className="sr-only"
         />
         <span className={`h-2.5 w-2.5 rounded-full ${checked ? "bg-white" : "bg-transparent"}`} />
       </span>
@@ -242,21 +253,24 @@ function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: React.R
 
 function DetailBlock({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="rounded-[20px] border border-line bg-field px-4 py-3">
+    <div className="min-w-0 rounded-2xl border border-line bg-field px-4 py-3 sm:rounded-[20px]">
       <dt className="text-[11px] font-bold uppercase text-ink/50">{label}</dt>
-      <dd className="mt-1 min-h-6 text-sm font-bold leading-snug text-ink">{value || "-"}</dd>
+      <dd className="mt-1 min-h-6 break-words text-sm font-bold leading-snug text-ink">{value || "-"}</dd>
     </div>
   );
 }
 
 export default function Home() {
+  const [mobileStep, setMobileStep] = useState<1 | 2 | 3>(1);
   const [searchTerm, setSearchTerm] = useState("");
+  const [firstName, setFirstName] = useState("");
   const [institutionQuery, setInstitutionQuery] = useState("");
   const [institution, setInstitution] = useState<InstitutionKey>("cpsbc");
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloadingPdfKey, setDownloadingPdfKey] = useState<string | null>(null);
   const [submittedSearchTerm, setSubmittedSearchTerm] = useState("");
+  const [submittedFirstName, setSubmittedFirstName] = useState("");
 
   const institutionConfig = resolveInstitutionConfig(institution);
   const institutionMeta = INSTITUTION_META[institution];
@@ -275,10 +289,13 @@ export default function Home() {
 
   async function checkRegistry() {
     const submittedTerm = searchTerm.trim();
+    const submittedGivenName = institution === "cpsbc" || institution === "cpsa" ? firstName.trim() : "";
 
+    setMobileStep(3);
     setLoading(true);
     setResult(null);
     setSubmittedSearchTerm(submittedTerm);
+    setSubmittedFirstName(submittedGivenName);
 
     try {
       const response = await fetch("/api/verify-cpsbc", {
@@ -286,7 +303,11 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ searchTerm: submittedTerm, institution }),
+        body: JSON.stringify({
+          searchTerm: submittedTerm,
+          firstName: submittedGivenName,
+          institution,
+        }),
       });
 
       const data = await response.json();
@@ -323,6 +344,7 @@ export default function Home() {
           profileUrl: item.profileUrl,
           fullName: item.fullName,
           searchTerm: submittedSearchTerm || searchTerm.trim(),
+          firstName: submittedFirstName || firstName.trim(),
         }),
       });
 
@@ -355,23 +377,22 @@ export default function Home() {
   const resultCount = result?.results?.length ?? 0;
 
   return (
-    <main className="flex min-h-screen bg-background px-3 py-5 text-ink sm:px-6 lg:h-screen lg:min-h-0 lg:overflow-hidden">
-      <section className="mx-auto grid w-full max-w-[1360px] gap-10 rounded-lg border border-line bg-paper px-5 py-10 shadow-xl shadow-ink/5 sm:px-8 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(300px,420px)_1fr] lg:gap-16 lg:overflow-hidden lg:px-14 lg:py-12">
-        <aside className="min-w-0 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-          <form onSubmit={handleSubmit} className="space-y-8">
-            <div>
+    <main className="flex min-h-screen bg-background text-ink sm:px-6 sm:py-5 lg:h-screen lg:min-h-0 lg:overflow-hidden">
+      <section className="mx-auto grid min-h-screen w-full max-w-[1360px] gap-7 bg-paper px-4 py-6 shadow-xl shadow-ink/5 sm:min-h-0 sm:rounded-lg sm:border sm:border-line sm:px-8 sm:py-10 lg:h-full lg:grid-cols-[minmax(300px,420px)_1fr] lg:gap-16 lg:overflow-hidden lg:px-14 lg:py-12">
+        <aside className={`${mobileStep === 3 ? "hidden lg:block" : "block"} min-w-0 lg:h-full lg:min-h-0 lg:overflow-hidden lg:pr-1`}>
+          <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-8 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:gap-6 lg:space-y-0">
+            <div className={`${mobileStep === 1 ? "block" : "hidden"} lg:block lg:shrink-0 lg:overflow-visible lg:pr-1`}>
               <p className="mb-5 inline-flex rounded-full bg-accent-soft px-4 py-2 text-sm font-black text-accent">
                 PaRx
               </p>
-              <h1 className="font-heading mb-8 text-4xl font-black leading-[0.95] text-ink sm:text-5xl">
+              <h1 className="font-heading mb-7 text-3xl font-black leading-[0.95] text-ink sm:mb-8 sm:text-5xl lg:text-4xl">
                 Prescriber
                 <br />
                 Licence
-                <br />
                 Checker
               </h1>
 
-              <div className="mt-6 space-y-3">
+              <div className="mt-6 space-y-3 lg:h-[clamp(220px,30vh,320px)] lg:overflow-y-auto lg:pr-1">
                 <div className="flex items-center justify-between gap-3">
                   <FieldLabel>Registry</FieldLabel>
                   <span className="text-xs font-bold uppercase text-ink/50">
@@ -388,7 +409,7 @@ export default function Home() {
                 <div
                   role="radiogroup"
                   aria-label="Institution"
-                  className="grid max-h-[260px] gap-3 overflow-y-auto pr-1"
+                  className="grid gap-3"
                 >
                   {filteredInstitutions.map((key) => (
                     <RegistryOption
@@ -398,8 +419,11 @@ export default function Home() {
                       onChange={() => {
                         setInstitution(key);
                         setSearchTerm("");
+                        setFirstName("");
                         setSubmittedSearchTerm("");
+                        setSubmittedFirstName("");
                         setResult(null);
+                        setMobileStep(1);
                       }}
                     />
                   ))}
@@ -409,10 +433,35 @@ export default function Home() {
                     No institutions match that search.
                   </p>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setMobileStep(2)}
+                  className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 lg:hidden"
+                >
+                  Continue
+                </button>
               </div>
             </div>
 
-            <div className="space-y-5">
+            <div className={`${mobileStep === 2 ? "block" : "hidden"} space-y-5 lg:block lg:shrink-0 lg:border-t lg:border-ink/12 lg:bg-paper lg:pt-5`}>
+              <div className="flex items-center justify-between gap-3 lg:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMobileStep(1)}
+                  aria-label="Go back to registry selection"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-field text-ink transition hover:border-accent/50 hover:bg-accent-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+                >
+                  <BackIcon />
+                </button>
+                <span className="rounded-full border border-line bg-surface px-4 py-2 text-xs font-black uppercase text-ink/70">
+                  {institutionConfig.label}
+                </span>
+              </div>
+              <div className="rounded-2xl border border-line bg-surface px-4 py-4 lg:hidden">
+                <p className="text-xs font-black uppercase text-ink/50">Selected registry</p>
+                <h2 className="mt-1 text-base font-black leading-snug text-ink">{institutionMeta.fullName}</h2>
+                <p className="mt-1 text-sm font-bold text-ink/55">{institutionMeta.province}</p>
+              </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="search-term">{institutionMeta.searchBy} *</FieldLabel>
                 <input
@@ -423,8 +472,21 @@ export default function Home() {
                   onChange={(event) => setSearchTerm(event.target.value)}
                   autoComplete="off"
                 />
-                <p className="text-xs font-bold text-ink/50">{institutionMeta.sample}</p>
               </div>
+
+              {(institution === "cpsbc" || institution === "cpsa") && (
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="first-name">First name</FieldLabel>
+                  <input
+                    id="first-name"
+                    className="w-full rounded-full border border-line bg-field px-6 py-4 text-base font-bold text-ink placeholder:text-ink/35 focus:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/25"
+                    placeholder="Optional"
+                    value={firstName}
+                    onChange={(event) => setFirstName(event.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -438,11 +500,11 @@ export default function Home() {
           </form>
         </aside>
 
-        <section className="min-w-0 space-y-5 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden">
+        <section className={`${mobileStep === 3 ? "block" : "hidden"} min-w-0 space-y-4 sm:space-y-5 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden`}>
           <div className="flex flex-wrap items-end justify-between gap-3 border-b border-ink/18 pb-4 lg:shrink-0">
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-black uppercase text-ink/50">Results</p>
-              <h2 className="font-heading mt-2 text-3xl font-black text-ink">
+              <h2 className="font-heading mt-2 text-2xl font-black text-ink sm:text-3xl">
                 {result
                   ? resultCount === 1
                     ? "1 record returned"
@@ -455,15 +517,32 @@ export default function Home() {
             </span>
           </div>
 
+          <div className="lg:hidden">
+            <button
+              type="button"
+              onClick={() => {
+                setResult(null);
+                setSearchTerm("");
+                setFirstName("");
+                setSubmittedSearchTerm("");
+                setSubmittedFirstName("");
+                setMobileStep(1);
+              }}
+              className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+            >
+              New Search
+            </button>
+          </div>
+
           {!result && (
-            <div className="flex min-h-[380px] items-center justify-center rounded-[30px] border border-dashed border-line bg-surface px-6 py-6 lg:flex-1">
-              <p className="text-base font-black text-ink/55">No search run yet</p>
+            <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-line bg-surface px-6 py-6 sm:min-h-[380px] sm:rounded-[30px] lg:flex-1">
+              <p className="text-base font-black text-ink/55">{loading ? "Checking..." : "No search run yet"}</p>
             </div>
           )}
 
           {result && (
             <div aria-live="polite" className="space-y-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-2">
-              <div className={`space-y-2 rounded-[30px] border px-6 py-5 ${outcomeMeta?.panel}`}>
+              <div className={`space-y-2 rounded-2xl border px-4 py-4 sm:rounded-[30px] sm:px-6 sm:py-5 ${outcomeMeta?.panel}`}>
                 <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black uppercase ${outcomeMeta?.badge}`}>
                   {outcomeMeta?.label}
                 </span>
@@ -506,12 +585,12 @@ export default function Home() {
                     return (
                       <article
                         key={`${item.fullName}-${index}`}
-                        className="space-y-4 rounded-[30px] border border-ink/10 bg-surface p-5"
+                        className="min-w-0 space-y-4 rounded-2xl border border-ink/10 bg-surface p-4 sm:rounded-[30px] sm:p-5"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <h3 className="font-heading text-2xl font-black text-ink">{item.fullName}</h3>
-                            <p className="mt-1 text-sm font-bold text-ink/55">{recordLabel}</p>
+                          <div className="min-w-0">
+                            <h3 className="font-heading break-words text-xl font-black text-ink sm:text-2xl">{item.fullName}</h3>
+                            <p className="mt-1 break-words text-sm font-bold text-ink/55">{recordLabel}</p>
                           </div>
                           <StatusBadge status={item.licenceStatus} />
                         </div>
@@ -528,7 +607,7 @@ export default function Home() {
                               type="button"
                               onClick={() => void downloadCpsbcPdf(item, index)}
                               disabled={downloadingPdfKey === itemKey}
-                              className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                             >
                               {downloadingPdfKey === itemKey && <Spinner />}
                               {downloadingPdfKey === itemKey ? "Downloading PDF..." : "Download CPSBC result PDF"}
@@ -538,7 +617,7 @@ export default function Home() {
                               href="https://www.cpsbc.ca/directory"
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-field px-4 py-2 text-sm font-black text-ink transition hover:border-accent/50 hover:bg-accent-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+                              className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-line bg-field px-4 py-2.5 text-center text-sm font-black text-ink transition hover:border-accent/50 hover:bg-accent-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
                             >
                               Open CPSBC directory page
                               <span aria-hidden="true">↗</span>
@@ -551,7 +630,7 @@ export default function Home() {
                             href={item.profileUrl}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+                            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-center text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
                           >
                             Open {institutionConfig.label} result page
                             <span aria-hidden="true">↗</span>

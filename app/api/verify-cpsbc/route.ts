@@ -7,6 +7,7 @@ export const maxDuration = 60;
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const searchTerm = body.searchTerm || body.lastName || body.city;
+  const firstName = body.firstName;
   const institution = body.institution;
 
   if (!searchTerm || typeof searchTerm !== "string" || !searchTerm.trim()) {
@@ -18,6 +19,7 @@ export async function POST(request: NextRequest) {
 
   const result = await verifyCpsbc({
     searchTerm: searchTerm.trim(),
+    firstName: typeof firstName === "string" ? firstName.trim() : undefined,
     institution: typeof institution === "string" ? institution : undefined,
   });
 

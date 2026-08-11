@@ -57,8 +57,3 @@ body {
   color: var(--color-foreground);
   font-family: var(--font-body);
 }
-
-::selection {
-  background: var(--color-accent);
-  color: var(--color-ink);
-}
