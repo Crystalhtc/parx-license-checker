@@ -38,8 +38,35 @@ type ResultItem = {
 
 type VerifyResult = {
   outcome: "possible_match" | "not_found" | "needs_review" | "error";
+  nameFound?: string;
+  licenceStatus?: string;
+  licenceClass?: string;
+  sourceUrl?: string;
   notes?: string;
   results?: ResultItem[];
+};
+
+type BulkResultItem = {
+  rowNumber: number;
+  firstName: string;
+  lastName: string;
+  licensingBody: string;
+  licenceNumber: string;
+  institution?: InstitutionKey;
+  outcome: VerifyResult["outcome"] | "skipped";
+  matchedName?: string;
+  licenceStatus?: string;
+  licenceClass?: string;
+  sourceUrl?: string;
+  notes?: string;
+};
+
+type BulkResult = {
+  totalRows: number;
+  checkedRows: number;
+  skippedRows: number;
+  limitReached: boolean;
+  results: BulkResultItem[];
 };
 
 const OUTCOME_META: Record<VerifyResult["outcome"], { label: string; badge: string; panel: string }> = {
@@ -182,6 +209,20 @@ function DownloadIcon() {
   );
 }
 
+function UploadIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 11.5v-8M4.75 6.75 8 3.5l3.25 3.25M3 12.5h10"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function BackIcon() {
   return (
     <svg className="h-5 w-5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -210,7 +251,7 @@ function RegistryOption({
 
   return (
     <label
-      className={`relative flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${
+      className={`relative flex w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${
         checked
           ? "border-accent bg-accent text-white shadow-sm"
           : "border-line bg-field text-ink hover:border-accent/50 hover:bg-accent-soft"
@@ -260,6 +301,126 @@ function DetailBlock({ label, value }: { label: string; value?: string }) {
   );
 }
 
+function BulkOutcomeBadge({ outcome }: { outcome: BulkResultItem["outcome"] }) {
+  const label = outcome === "skipped" ? "Skipped" : OUTCOME_META[outcome].label;
+  const className =
+    outcome === "skipped"
+      ? "bg-unknown text-white"
+      : OUTCOME_META[outcome].badge;
+
+  return (
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-black uppercase ${className}`}>
+      {label}
+    </span>
+  );
+}
+
+type CsvRecord = Record<string, string>;
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let field = "";
+  let row: string[] = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    const nextCharacter = text[index + 1];
+
+    if (character === '"' && inQuotes && nextCharacter === '"') {
+      field += '"';
+      index += 1;
+      continue;
+    }
+
+    if (character === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (character === "," && !inQuotes) {
+      row.push(field);
+      field = "";
+      continue;
+    }
+
+    if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && nextCharacter === "\n") {
+        index += 1;
+      }
+      row.push(field);
+      rows.push(row);
+      field = "";
+      row = [];
+      continue;
+    }
+
+    field += character;
+  }
+
+  row.push(field);
+  rows.push(row);
+
+  return rows;
+}
+
+function normalizeCsvHeader(value: string) {
+  return value
+    .replace(/^\uFEFF/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function recordsFromCsv(text: string) {
+  const parsedRows = parseCsv(text).filter((row) => row.some((field) => field.trim()));
+  const [headers = [], ...dataRows] = parsedRows;
+  const normalizedHeaders = headers.map(normalizeCsvHeader);
+
+  return dataRows.map((dataRow) => {
+    const record: CsvRecord = {};
+
+    dataRow.forEach((field, index) => {
+      const header = normalizedHeaders[index] || `column${index}`;
+      record[header] = field.trim();
+    });
+
+    return record;
+  });
+}
+
+function csvValue(record: CsvRecord, aliases: string[]) {
+  for (const alias of aliases) {
+    const value = record[normalizeCsvHeader(alias)];
+    if (value) return value;
+  }
+
+  return "";
+}
+
+function detectInstitution(licensingBody: string, province: string): InstitutionKey | undefined {
+  const normalized = `${licensingBody} ${province}`.toLowerCase();
+
+  if (/(cpsbc|british columbia|\bbc\b)/i.test(normalized)) return "cpsbc";
+  if (/(cpso|ontario|\bon\b)/i.test(normalized)) return "cpso";
+  if (/(cpsa|alberta|\bab\b)/i.test(normalized)) return "cpsa";
+
+  return undefined;
+}
+
+function resultMatchesLicenceNumber(result: ResultItem, licenceNumber: string) {
+  if (!licenceNumber) return false;
+
+  const normalizedLicenceNumber = licenceNumber.replace(/\D/g, "");
+  return [result.cpsoNumber, result.registrationNumber, result.licenceClass]
+    .filter(Boolean)
+    .some((value) => value?.replace(/\D/g, "") === normalizedLicenceNumber);
+}
+
+function pickBestResult(verification: VerifyResult, licenceNumber: string) {
+  const results = verification.results || [];
+  return results.find((item) => resultMatchesLicenceNumber(item, licenceNumber)) || results[0];
+}
+
 export default function Home() {
   const [mobileStep, setMobileStep] = useState<1 | 2 | 3>(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -267,7 +428,10 @@ export default function Home() {
   const [institutionQuery, setInstitutionQuery] = useState("");
   const [institution, setInstitution] = useState<InstitutionKey>("cpsbc");
   const [result, setResult] = useState<VerifyResult | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkDragActive, setBulkDragActive] = useState(false);
   const [downloadingPdfKey, setDownloadingPdfKey] = useState<string | null>(null);
   const [submittedSearchTerm, setSubmittedSearchTerm] = useState("");
   const [submittedFirstName, setSubmittedFirstName] = useState("");
@@ -294,6 +458,7 @@ export default function Home() {
     setMobileStep(3);
     setLoading(true);
     setResult(null);
+    setBulkResult(null);
     setSubmittedSearchTerm(submittedTerm);
     setSubmittedFirstName(submittedGivenName);
 
@@ -317,6 +482,7 @@ export default function Home() {
         outcome: "error",
         notes: "Something went wrong reaching the verification service. Please try again.",
       });
+      setBulkResult(null);
     } finally {
       setLoading(false);
     }
@@ -328,8 +494,157 @@ export default function Home() {
     void checkRegistry();
   }
 
-  async function downloadCpsbcPdf(item: ResultItem, index: number) {
-    if (!item.profileUrl) return;
+  async function processCsvFile(file: File) {
+    if (!file || bulkLoading) return;
+
+    setMobileStep(3);
+    setBulkLoading(true);
+    setResult(null);
+    setBulkResult(null);
+
+    try {
+      const records = recordsFromCsv(await file.text());
+      const importedRows: BulkResultItem[] = [];
+
+      if (records.length === 0) {
+        throw new Error("CSV has no importable rows.");
+      }
+
+      setBulkResult({
+        totalRows: records.length,
+        checkedRows: 0,
+        skippedRows: 0,
+        limitReached: false,
+        results: [],
+      });
+
+      for (const [index, record] of records.entries()) {
+        const firstName = csvValue(record, ["First Name", "Given Name"]);
+        const lastName = csvValue(record, ["Last Name", "Surname"]);
+        const licensingBody = csvValue(record, ["Licensing Body", "Licence Body", "License Body", "College"]);
+        const licenceNumber = csvValue(record, ["Licence Number", "License Number", "Registration Number", "CPSO Number"]);
+        const province = csvValue(record, ["Province"]);
+        const detectedInstitution = detectInstitution(licensingBody, province);
+        const rowNumber = index + 2;
+
+        if (!detectedInstitution) {
+          importedRows.push({
+            rowNumber,
+            firstName,
+            lastName,
+            licensingBody,
+            licenceNumber,
+            outcome: "skipped",
+            notes: "Licensing body was not recognized.",
+          });
+        } else {
+          const rowSearchTerm = detectedInstitution === "cpso" ? licenceNumber || lastName : lastName;
+
+          if (!rowSearchTerm) {
+            importedRows.push({
+              rowNumber,
+              firstName,
+              lastName,
+              licensingBody,
+              licenceNumber,
+              institution: detectedInstitution,
+              outcome: "skipped",
+              notes: detectedInstitution === "cpso" ? "CPSO licence number is missing." : "Last name is missing.",
+            });
+          } else {
+            const response = await fetch("/api/verify-cpsbc", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                institution: detectedInstitution,
+                searchTerm: rowSearchTerm,
+                firstName: detectedInstitution === "cpsbc" || detectedInstitution === "cpsa" ? firstName : undefined,
+              }),
+            });
+            const verification: VerifyResult = await response.json();
+
+            if (!response.ok) {
+              throw new Error(verification.notes || "Verification failed.");
+            }
+
+            const matchedResult = pickBestResult(verification, licenceNumber);
+
+            importedRows.push({
+              rowNumber,
+              firstName,
+              lastName,
+              licensingBody,
+              licenceNumber,
+              institution: detectedInstitution,
+              outcome: verification.outcome,
+              matchedName: matchedResult?.fullName || verification.nameFound,
+              licenceStatus: matchedResult?.licenceStatus || verification.licenceStatus,
+              licenceClass: matchedResult?.licenceClass || verification.licenceClass,
+              sourceUrl: matchedResult?.profileUrl || verification.sourceUrl,
+              notes: verification.notes,
+            });
+          }
+        }
+
+        setBulkResult({
+          totalRows: records.length,
+          checkedRows: importedRows.filter((item) => item.outcome !== "skipped").length,
+          skippedRows: importedRows.filter((item) => item.outcome === "skipped").length,
+          limitReached: false,
+          results: [...importedRows],
+        });
+      }
+    } catch {
+      setResult({
+        outcome: "error",
+        notes: "The CSV could not be imported. Please check the file and try again.",
+      });
+      setBulkResult(null);
+    } finally {
+      setBulkLoading(false);
+      setBulkDragActive(false);
+    }
+  }
+
+  async function importCsv(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    try {
+      if (file) {
+        await processCsvFile(file);
+      }
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  function handleBulkDrag(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!bulkLoading) {
+      setBulkDragActive(event.type === "dragenter" || event.type === "dragover");
+    }
+  }
+
+  function handleBulkDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setBulkDragActive(false);
+
+    const file = event.dataTransfer.files?.[0];
+    if (file) {
+      void processCsvFile(file);
+    }
+  }
+
+  async function downloadCpsbcPdf(
+    item: ResultItem,
+    index: number,
+    searchOverride?: { lastName?: string; firstName?: string }
+  ) {
+    if (!item.profileUrl && !searchOverride?.lastName) return;
 
     const downloadKey = `${item.fullName}-${index}`;
     setDownloadingPdfKey(downloadKey);
@@ -343,8 +658,8 @@ export default function Home() {
         body: JSON.stringify({
           profileUrl: item.profileUrl,
           fullName: item.fullName,
-          searchTerm: submittedSearchTerm || searchTerm.trim(),
-          firstName: submittedFirstName || firstName.trim(),
+          searchTerm: searchOverride?.lastName || submittedSearchTerm || searchTerm.trim(),
+          firstName: searchOverride?.firstName || submittedFirstName || firstName.trim(),
         }),
       });
 
@@ -375,6 +690,20 @@ export default function Home() {
   const outcomeMeta = result ? OUTCOME_META[result.outcome] : null;
   const isErrorOutcome = result?.outcome === "error";
   const resultCount = result?.results?.length ?? 0;
+  const displayCount = bulkResult ? bulkResult.results.length : resultCount;
+  const bulkFinishedRows = bulkResult ? bulkResult.checkedRows + bulkResult.skippedRows : 0;
+  const bulkProgressPercent = bulkResult?.totalRows
+    ? Math.round((bulkFinishedRows / bulkResult.totalRows) * 100)
+    : 0;
+  const resultHeading = bulkResult
+    ? bulkLoading
+      ? `Checking ${bulkFinishedRows} of ${bulkResult.totalRows} rows`
+      : `${displayCount} rows imported`
+    : result
+      ? resultCount === 1
+        ? "1 record returned"
+        : `${resultCount} records returned`
+      : "Ready to search";
 
   return (
     <main className="flex min-h-screen bg-background text-ink sm:px-6 sm:py-5 lg:h-screen lg:min-h-0 lg:overflow-hidden">
@@ -392,58 +721,47 @@ export default function Home() {
                 Checker
               </h1>
 
-              <div className="mt-6 space-y-3 lg:h-[clamp(220px,30vh,320px)] lg:overflow-y-auto lg:pr-1">
-                <div className="flex items-center justify-between gap-3">
-                  <FieldLabel>Registry</FieldLabel>
-                  <span className="text-xs font-bold uppercase text-ink/50">
-                    {filteredInstitutions.length} of {INSTITUTIONS.length}
-                  </span>
-                </div>
-                <input
-                  className="w-full rounded-full border border-line bg-field px-4 py-3 text-sm font-bold text-ink placeholder:text-ink/35 focus:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/25"
-                  placeholder="Search institution"
-                  value={institutionQuery}
-                  onChange={(event) => setInstitutionQuery(event.target.value)}
-                  autoComplete="off"
-                />
-                <div
-                  role="radiogroup"
-                  aria-label="Institution"
-                  className="grid gap-3"
+              <div className="mt-6 space-y-3">
+                <label
+                  onDragEnter={handleBulkDrag}
+                  onDragOver={handleBulkDrag}
+                  onDragLeave={handleBulkDrag}
+                  onDrop={handleBulkDrop}
+                  className={`flex min-h-36 w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed px-5 py-6 text-center transition focus-within:ring-2 focus-within:ring-accent/35 ${
+                    bulkDragActive
+                      ? "border-accent bg-accent-soft ring-4 ring-accent/15"
+                      : "border-line bg-surface hover:border-accent/60 hover:bg-accent-soft"
+                  }`}
                 >
-                  {filteredInstitutions.map((key) => (
-                    <RegistryOption
-                      key={key}
-                      institutionKey={key}
-                      checked={institution === key}
-                      onChange={() => {
-                        setInstitution(key);
-                        setSearchTerm("");
-                        setFirstName("");
-                        setSubmittedSearchTerm("");
-                        setSubmittedFirstName("");
-                        setResult(null);
-                        setMobileStep(1);
-                      }}
-                    />
-                  ))}
-                </div>
-                {filteredInstitutions.length === 0 && (
-                  <p className="rounded-2xl border border-dashed border-line bg-surface px-4 py-3 text-sm font-bold text-ink/55">
-                    No institutions match that search.
-                  </p>
-                )}
+                  <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-white shadow-sm">
+                    {bulkLoading ? <Spinner /> : <UploadIcon />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-black uppercase text-accent">Bulk import</span>
+                    <span className="mt-1 block text-base font-black leading-tight text-ink">
+                      {bulkLoading ? "Importing CSV..." : "Drag CSV here or click to upload"}
+                    </span>
+                    <span className="mt-1 block text-xs font-bold text-ink/45">CSV files only</span>
+                  </span>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="sr-only"
+                    onChange={(event) => void importCsv(event)}
+                    disabled={bulkLoading || loading}
+                  />
+                </label>
                 <button
                   type="button"
                   onClick={() => setMobileStep(2)}
-                  className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 lg:hidden"
+                  className="inline-flex min-h-12 w-full items-center justify-center rounded-xl border border-line bg-field px-5 py-3 text-sm font-black text-ink transition hover:border-accent/50 hover:bg-accent-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 lg:hidden"
                 >
-                  Continue
+                  Manual search
                 </button>
               </div>
             </div>
 
-            <div className={`${mobileStep === 2 ? "block" : "hidden"} space-y-5 lg:block lg:shrink-0 lg:border-t lg:border-ink/12 lg:bg-paper lg:pt-5`}>
+            <div className={`${mobileStep === 2 ? "block" : "hidden"} space-y-5 lg:block lg:min-h-0 lg:shrink lg:overflow-y-auto lg:border-t lg:border-ink/12 lg:bg-paper lg:pt-5 lg:pr-1`}>
               <div className="flex items-center justify-between gap-3 lg:hidden">
                 <button
                   type="button"
@@ -457,11 +775,50 @@ export default function Home() {
                   {institutionConfig.label}
                 </span>
               </div>
-              <div className="rounded-2xl border border-line bg-surface px-4 py-4 lg:hidden">
-                <p className="text-xs font-black uppercase text-ink/50">Selected registry</p>
-                <h2 className="mt-1 text-base font-black leading-snug text-ink">{institutionMeta.fullName}</h2>
-                <p className="mt-1 text-sm font-bold text-ink/55">{institutionMeta.province}</p>
+
+              <div>
+                <p className="text-xs font-black uppercase text-ink/50">Manual search</p>
               </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <FieldLabel>Registry</FieldLabel>
+                  <span className="text-xs font-bold uppercase text-ink/50">
+                    {filteredInstitutions.length} of {INSTITUTIONS.length}
+                  </span>
+                </div>
+                <input
+                  className="w-full rounded-full border border-line bg-field px-4 py-3 text-sm font-bold text-ink placeholder:text-ink/35 focus:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/25"
+                  placeholder="Search institution"
+                  value={institutionQuery}
+                  onChange={(event) => setInstitutionQuery(event.target.value)}
+                  autoComplete="off"
+                />
+                <div role="radiogroup" aria-label="Institution" className="grid gap-3">
+                  {filteredInstitutions.map((key) => (
+                    <RegistryOption
+                      key={key}
+                      institutionKey={key}
+                      checked={institution === key}
+                      onChange={() => {
+                        setInstitution(key);
+                        setSearchTerm("");
+                        setFirstName("");
+                        setSubmittedSearchTerm("");
+                        setSubmittedFirstName("");
+                        setResult(null);
+                        setBulkResult(null);
+                      }}
+                    />
+                  ))}
+                </div>
+                {filteredInstitutions.length === 0 && (
+                  <p className="rounded-2xl border border-dashed border-line bg-surface px-4 py-3 text-sm font-bold text-ink/55">
+                    No institutions match that search.
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <FieldLabel htmlFor="search-term">{institutionMeta.searchBy} *</FieldLabel>
                 <input
@@ -491,7 +848,7 @@ export default function Home() {
               <button
                 type="submit"
                 className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-accent px-7 py-4 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:cursor-not-allowed disabled:opacity-45"
-                disabled={loading || !searchTerm.trim()}
+                disabled={loading || bulkLoading || !searchTerm.trim()}
               >
                 {loading && <Spinner />}
                 {loading ? "Checking..." : `Check ${institutionConfig.label}`}
@@ -505,15 +862,11 @@ export default function Home() {
             <div className="min-w-0">
               <p className="text-xs font-black uppercase text-ink/50">Results</p>
               <h2 className="font-heading mt-2 text-2xl font-black text-ink sm:text-3xl">
-                {result
-                  ? resultCount === 1
-                    ? "1 record returned"
-                    : `${resultCount} records returned`
-                  : "Ready to search"}
+                {resultHeading}
               </h2>
             </div>
             <span className="rounded-full border border-line bg-surface px-4 py-2 text-xs font-black uppercase text-ink/70">
-              {institutionConfig.label}
+              {bulkResult ? "Bulk import" : institutionConfig.label}
             </span>
           </div>
 
@@ -526,17 +879,135 @@ export default function Home() {
                 setFirstName("");
                 setSubmittedSearchTerm("");
                 setSubmittedFirstName("");
+                setBulkResult(null);
                 setMobileStep(1);
               }}
-              className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+              disabled={bulkLoading}
+              className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-45"
             >
               New Search
             </button>
           </div>
 
-          {!result && (
+          {!result && !bulkResult && (
             <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-line bg-surface px-6 py-6 sm:min-h-[380px] sm:rounded-[30px] lg:flex-1">
-              <p className="text-base font-black text-ink/55">{loading ? "Checking..." : "No search run yet"}</p>
+              <p className="text-base font-black text-ink/55">{loading || bulkLoading ? "Checking..." : "No search run yet"}</p>
+            </div>
+          )}
+
+          {bulkResult && (
+            <div aria-live="polite" className="space-y-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-2">
+              <div className={`space-y-3 rounded-2xl border px-4 py-4 sm:rounded-[30px] sm:px-6 sm:py-5 ${
+                bulkLoading ? "border-accent/25 bg-accent-soft" : "border-success/25 bg-accent-soft"
+              }`}>
+                <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black uppercase text-white ${
+                  bulkLoading ? "bg-accent" : "bg-success"
+                }`}>
+                  {bulkLoading && <Spinner />}
+                  {bulkLoading ? "Checking CSV rows" : "Bulk import complete"}
+                </span>
+                <p className="text-sm font-bold text-ink/65">
+                  {bulkLoading ? "Please keep this page open until all rows are checked. " : ""}
+                  Checked {bulkFinishedRows} of {bulkResult.totalRows} rows.
+                  {bulkResult.skippedRows > 0 ? ` ${bulkResult.skippedRows} skipped.` : ""}
+                  {bulkResult.limitReached ? " Import stopped at the 50-row safety limit." : ""}
+                </p>
+                <div className="h-3 overflow-hidden rounded-full bg-ink/10" aria-label={`Bulk import ${bulkProgressPercent}% complete`}>
+                  <div
+                    className="h-full rounded-full bg-accent transition-all"
+                    style={{ width: `${bulkProgressPercent}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {bulkResult.results.map((item) => {
+                  const detectedRegistry = item.institution ? resolveInstitutionConfig(item.institution).label : "Unknown";
+                  const inputName = [item.firstName, item.lastName].filter(Boolean).join(" ") || "Unnamed row";
+                  const bulkItemKey = `${item.matchedName || inputName}-${item.rowNumber}`;
+                  const cpsbcResultItem: ResultItem = {
+                    fullName: item.matchedName || inputName,
+                    licenceStatus: item.licenceStatus,
+                    licenceClass: item.licenceClass,
+                    profileUrl: item.sourceUrl,
+                  };
+
+                  return (
+                    <article
+                      key={`${item.rowNumber}-${item.licenceNumber}-${item.lastName}`}
+                      className="min-w-0 space-y-4 rounded-2xl border border-ink/10 bg-surface p-4 sm:rounded-[30px] sm:p-5"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-black uppercase text-ink/45">CSV row {item.rowNumber}</p>
+                          <h3 className="font-heading mt-1 break-words text-xl font-black text-ink sm:text-2xl">
+                            {inputName}
+                          </h3>
+                          <p className="mt-1 break-words text-sm font-bold text-ink/55">
+                            {detectedRegistry}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <BulkOutcomeBadge outcome={item.outcome} />
+                          <StatusBadge status={item.licenceStatus} />
+                        </div>
+                      </div>
+
+                      <dl className="grid gap-3 sm:grid-cols-2">
+                        <DetailBlock label="Matched name" value={item.matchedName} />
+                        <DetailBlock label="Licence number" value={item.licenceNumber} />
+                        <DetailBlock label="Current status" value={item.licenceStatus} />
+                        <DetailBlock label="Registration class" value={item.licenceClass} />
+                      </dl>
+
+                      {item.notes && (
+                        <p className="text-sm font-bold text-ink/60">{item.notes}</p>
+                      )}
+
+                      {item.institution === "cpsbc" && item.lastName && (
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void downloadCpsbcPdf(cpsbcResultItem, item.rowNumber, {
+                                lastName: item.lastName,
+                                firstName: item.firstName,
+                              })
+                            }
+                            disabled={downloadingPdfKey === bulkItemKey}
+                            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                          >
+                            {downloadingPdfKey === bulkItemKey && <Spinner />}
+                            {downloadingPdfKey === bulkItemKey ? "Downloading PDF..." : "Download CPSBC result PDF"}
+                            {downloadingPdfKey !== bulkItemKey && <DownloadIcon />}
+                          </button>
+                          <a
+                            href="https://www.cpsbc.ca/directory"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-line bg-field px-4 py-2.5 text-center text-sm font-black text-ink transition hover:border-accent/50 hover:bg-accent-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
+                          >
+                            Open CPSBC directory page
+                            <span aria-hidden="true">↗</span>
+                          </a>
+                        </div>
+                      )}
+
+                      {item.sourceUrl && item.institution !== "cpsbc" && (
+                        <a
+                          href={item.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-center text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
+                        >
+                          Open source result
+                          <span aria-hidden="true">↗</span>
+                        </a>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
             </div>
           )}
 
