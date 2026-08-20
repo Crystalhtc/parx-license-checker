@@ -1,4 +1,14 @@
-export type InstitutionKey = "cpsbc" | "cpso" | "cpsa";
+export type InstitutionKey =
+  | "cpsbc"
+  | "cpso"
+  | "cpsa"
+  | "cpssk"
+  | "cpsm"
+  | "cmq"
+  | "cpsns"
+  | "cpsnb"
+  | "cpspei"
+  | "cpsnl";
 
 export type InstitutionConfig = {
   key: InstitutionKey;
@@ -42,14 +52,92 @@ const institutionConfigs: Record<InstitutionKey, InstitutionConfig> = {
     resultPagePattern: "/PhysicianProfile",
     searchPlaceholder: "Last name",
   },
+  cpssk: {
+    key: "cpssk",
+    label: "CPSS",
+    baseUrl: "https://www.cps.sk.ca/",
+    searchInputSelector: 'input[name*="last" i], input[aria-label*="Last" i]',
+    submitSelector: 'button:has-text("Search"), input[type="submit"]',
+    resultSelector: "table tbody tr, .search-result, .result-item",
+    resultPagePattern: "/imis/",
+    searchPlaceholder: "Last name",
+  },
+  cpsm: {
+    key: "cpsm",
+    label: "CPSM",
+    baseUrl: "https://member.cpsm.mb.ca/member/profilesearch",
+    searchInputSelector: "input.form-control",
+    submitSelector: 'button:has-text("Search")',
+    resultSelector: ".listingCore tbody tr",
+    resultPagePattern: "/member/profile",
+    searchPlaceholder: "Last name",
+  },
+  cmq: {
+    key: "cmq",
+    label: "CMQ",
+    baseUrl: "https://form.cmq.org/fr/bottin?search=physician",
+    searchInputSelector: 'input[name="query"]',
+    submitSelector: 'button[aria-label*="Rechercher" i], button[type="submit"]',
+    resultSelector: "article, .search-result, table tbody tr",
+    resultPagePattern: "/fr/bottin",
+    searchPlaceholder: "Last name or licence number",
+  },
+  cpsns: {
+    key: "cpsns",
+    label: "CPSNS",
+    baseUrl: "https://cpsnsphysiciansearch.azurewebsites.net/",
+    searchInputSelector: "#lastname",
+    submitSelector: "#search",
+    resultSelector: "table tbody tr",
+    resultPagePattern: "SearchResults.aspx",
+    searchPlaceholder: "Licence number",
+  },
+  cpsnb: {
+    key: "cpsnb",
+    label: "CPSNB",
+    baseUrl: "https://cpsnb.alinityapp.com/Client/PublicDirectory",
+    searchInputSelector: 'input[name="last name"]',
+    submitSelector: 'button[name="Search"]',
+    resultSelector: "table tbody tr",
+    resultPagePattern: "medical-directory",
+    searchPlaceholder: "Last name",
+  },
+  cpspei: {
+    key: "cpspei",
+    label: "CPSPEI",
+    baseUrl: "https://cpspei.alinityapp.com/client/publicdirectory",
+    searchInputSelector: "#ParameterForm1000608_TextOptionC",
+    submitSelector: ".als-search-button",
+    resultSelector: "table tbody tr",
+    resultPagePattern: "publicdirectory",
+    searchPlaceholder: "Licence number",
+  },
+  cpsnl: {
+    key: "cpsnl",
+    label: "CPSNL",
+    baseUrl: "https://cpsnl.alinityapp.com/client/publicdirectory",
+    searchInputSelector: "#ParameterForm1000608_TextOptionC",
+    submitSelector: ".als-search-button",
+    resultSelector: "table tbody tr",
+    resultPagePattern: "publicdirectory",
+    searchPlaceholder: "Licence number",
+  },
 };
 
 export function normalizeInstitution(value?: string | null): InstitutionKey {
-  if (value === "cpso") {
-    return "cpso";
-  }
-  if (value === "cpsa") {
-    return "cpsa";
+  if (
+    value === "cpsbc" ||
+    value === "cpso" ||
+    value === "cpsa" ||
+    value === "cpssk" ||
+    value === "cpsm" ||
+    value === "cmq" ||
+    value === "cpsns" ||
+    value === "cpsnb" ||
+    value === "cpspei" ||
+    value === "cpsnl"
+  ) {
+    return value;
   }
   return "cpsbc";
 }

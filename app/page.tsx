@@ -1,9 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import * as XLSX from "xlsx";
 import { resolveInstitutionConfig, type InstitutionKey } from "@/lib/institutionConfig";
 
-const INSTITUTIONS: InstitutionKey[] = ["cpsbc", "cpso", "cpsa"];
+const INSTITUTIONS: InstitutionKey[] = [
+  "cpsbc",
+  "cpso",
+  "cpsa",
+  "cpssk",
+  "cpsm",
+  "cmq",
+  "cpsns",
+  "cpsnb",
+  "cpspei",
+  "cpsnl",
+];
 
 const INSTITUTION_META: Record<
   InstitutionKey,
@@ -23,6 +35,41 @@ const INSTITUTION_META: Record<
     fullName: "College of Physicians and Surgeons of Alberta",
     province: "Alberta",
     searchBy: "Last name",
+  },
+  cpssk: {
+    fullName: "College of Physicians and Surgeons of Saskatchewan",
+    province: "Saskatchewan",
+    searchBy: "Last name",
+  },
+  cpsm: {
+    fullName: "College of Physicians and Surgeons of Manitoba",
+    province: "Manitoba",
+    searchBy: "Last name",
+  },
+  cmq: {
+    fullName: "College des medecins du Quebec",
+    province: "Quebec",
+    searchBy: "Last name or licence number",
+  },
+  cpsns: {
+    fullName: "College of Physicians and Surgeons of Nova Scotia",
+    province: "Nova Scotia",
+    searchBy: "Licence number",
+  },
+  cpsnb: {
+    fullName: "College of Physicians and Surgeons of New Brunswick",
+    province: "New Brunswick",
+    searchBy: "Last name",
+  },
+  cpspei: {
+    fullName: "College of Physicians and Surgeons of Prince Edward Island",
+    province: "Prince Edward Island",
+    searchBy: "Licence number",
+  },
+  cpsnl: {
+    fullName: "College of Physicians and Surgeons of Newfoundland and Labrador",
+    province: "Newfoundland and Labrador",
+    searchBy: "Licence number",
   },
 };
 
@@ -52,9 +99,11 @@ type BulkResultItem = {
   lastName: string;
   licensingBody: string;
   licenceNumber: string;
+  sourceRecord: CsvRecord;
   institution?: InstitutionKey;
   outcome: VerifyResult["outcome"] | "skipped";
   matchedName?: string;
+  resultLicenceNumber?: string;
   licenceStatus?: string;
   licenceClass?: string;
   sourceUrl?: string;
@@ -66,6 +115,7 @@ type BulkResult = {
   checkedRows: number;
   skippedRows: number;
   limitReached: boolean;
+  sourceHeaders: string[];
   results: BulkResultItem[];
 };
 
@@ -94,7 +144,11 @@ const OUTCOME_META: Record<VerifyResult["outcome"], { label: string; badge: stri
 
 function isActiveStatus(status?: string) {
   const normalized = status?.toLowerCase();
-  return normalized === "practising" || normalized === "active";
+  if (!normalized || normalized.includes("non-practising") || normalized.includes("non-practicing")) {
+    return false;
+  }
+
+  return normalized === "practising" || normalized === "active" || normalized === "regulated member - full";
 }
 
 function getStatusTone(status?: string) {
@@ -122,7 +176,8 @@ function getStatusTone(status?: string) {
     normalized.includes("revok") ||
     normalized.includes("resign") ||
     normalized.includes("inactive") ||
-    normalized.includes("expired")
+    normalized.includes("expired") ||
+    normalized.includes("not verified")
   ) {
     return {
       label: status,
@@ -316,6 +371,47 @@ function BulkOutcomeBadge({ outcome }: { outcome: BulkResultItem["outcome"] }) {
 }
 
 type CsvRecord = Record<string, string>;
+type UploadedRecord = {
+  normalized: CsvRecord;
+  original: CsvRecord;
+};
+
+type UploadedRows = {
+  headers: string[];
+  records: UploadedRecord[];
+};
+
+const IMPORT_COLUMN_ALIASES = {
+  firstName: ["First Name", "Given Name", "Given Names", "Forename", "First"],
+  lastName: ["Last Name", "Surname", "Family Name", "Last"],
+  licensingBody: [
+    "Licensing Body",
+    "Licence Body",
+    "License Body",
+    "Licensing College",
+    "Licence College",
+    "License College",
+    "Regulatory Body",
+    "Regulator",
+    "College",
+    "Institution",
+    "Registry",
+  ],
+  licenceNumber: [
+    "Licence Number",
+    "License Number",
+    "Registration Number",
+    "Registration ID",
+    "Registration No",
+    "Licence No",
+    "License No",
+    "CPSO Number",
+    "CPSO #",
+    "Member Number",
+    "Member ID",
+  ],
+  province: ["Province", "Jurisdiction", "Province/Territory", "Province or Territory"],
+};
 
 function parseCsv(text: string) {
   const rows: string[][] = [];
@@ -372,20 +468,52 @@ function normalizeCsvHeader(value: string) {
 }
 
 function recordsFromCsv(text: string) {
-  const parsedRows = parseCsv(text).filter((row) => row.some((field) => field.trim()));
-  const [headers = [], ...dataRows] = parsedRows;
+  return recordsFromRows(parseCsv(text));
+}
+
+function recordsFromRows(parsedRows: string[][]) {
+  const nonEmptyRows = parsedRows.filter((row) => row.some((field) => String(field).trim()));
+  const [headers = [], ...dataRows] = nonEmptyRows;
+  const sourceHeaders = headers.map((header, index) => header.trim() || `Column ${index + 1}`);
   const normalizedHeaders = headers.map(normalizeCsvHeader);
 
-  return dataRows.map((dataRow) => {
-    const record: CsvRecord = {};
+  return {
+    headers: sourceHeaders,
+    records: dataRows.map((dataRow) => {
+      const normalized: CsvRecord = {};
+      const original: CsvRecord = {};
 
-    dataRow.forEach((field, index) => {
-      const header = normalizedHeaders[index] || `column${index}`;
-      record[header] = field.trim();
+      dataRow.forEach((field, index) => {
+        const normalizedHeader = normalizedHeaders[index] || `column${index}`;
+        const sourceHeader = sourceHeaders[index] || `Column ${index + 1}`;
+        normalized[normalizedHeader] = field.trim();
+        original[sourceHeader] = field.trim();
+      });
+
+      return { normalized, original };
+    }),
+  };
+}
+
+async function recordsFromUpload(file: File): Promise<UploadedRows> {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "xlsx" || extension === "xls") {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const firstSheetName = workbook.SheetNames[0];
+    const firstSheet = firstSheetName ? workbook.Sheets[firstSheetName] : undefined;
+    if (!firstSheet) return { headers: [], records: [] };
+
+    const rows = XLSX.utils.sheet_to_json<string[]>(firstSheet, {
+      header: 1,
+      defval: "",
+      raw: false,
     });
 
-    return record;
-  });
+    return recordsFromRows(rows.map((row) => row.map((cell) => String(cell).trim())));
+  }
+
+  return recordsFromCsv(await file.text());
 }
 
 function csvValue(record: CsvRecord, aliases: string[]) {
@@ -398,11 +526,23 @@ function csvValue(record: CsvRecord, aliases: string[]) {
 }
 
 function detectInstitution(licensingBody: string, province: string): InstitutionKey | undefined {
-  const normalized = `${licensingBody} ${province}`.toLowerCase();
+  const normalizedBody = licensingBody.toLowerCase();
+  const normalizedProvince = province.toLowerCase();
+  const normalized = normalizedBody || normalizedProvince;
+  const hasPhysicianCollegeName = /college of physicians (and|&) surgeons|coll[eè]ge des m[eé]decins/i.test(normalized);
 
-  if (/(cpsbc|british columbia|\bbc\b)/i.test(normalized)) return "cpsbc";
-  if (/(cpso|ontario|\bon\b)/i.test(normalized)) return "cpso";
-  if (/(cpsa|alberta|\bab\b)/i.test(normalized)) return "cpsa";
+  if (/(^|\b)cpsbc(\b|$)|college of physicians (and|&) surgeons of british columbia/i.test(normalized)) return "cpsbc";
+  if (/(^|\b)cpso(\b|$)|college of physicians (and|&) surgeons of ontario/i.test(normalized)) return "cpso";
+  if (/(^|\b)cpsa(\b|$)|college of physicians (and|&) surgeons of alberta/i.test(normalized)) return "cpsa";
+  if (/(^|\b)cpssk(\b|$)|(^|\b)cps\.sk(\b|$)|college of physicians (and|&) surgeons of saskatchewan/i.test(normalized)) return "cpssk";
+  if (/(^|\b)cpsm(\b|$)|college of physicians (and|&) surgeons of manitoba/i.test(normalized)) return "cpsm";
+  if (/(^|\b)cmq(\b|$)|coll[eè]ge des m[eé]decins du qu[eé]bec|college des medecins du quebec/i.test(normalized)) return "cmq";
+  if (/(^|\b)cpsns(\b|$)|college of physicians (and|&) surgeons of nova scotia/i.test(normalized)) return "cpsns";
+  if (/(^|\b)cpsnb(\b|$)|college of physicians (and|&) surgeons of new brunswick/i.test(normalized)) return "cpsnb";
+  if (/(^|\b)cpspei(\b|$)|college of physicians (and|&) surgeons of prince edward island/i.test(normalized)) return "cpspei";
+  if (/(^|\b)cpsnl(\b|$)|college of physicians (and|&) surgeons of newfoundland and labrador/i.test(normalized)) return "cpsnl";
+
+  if (hasPhysicianCollegeName) return undefined;
 
   return undefined;
 }
@@ -419,6 +559,54 @@ function resultMatchesLicenceNumber(result: ResultItem, licenceNumber: string) {
 function pickBestResult(verification: VerifyResult, licenceNumber: string) {
   const results = verification.results || [];
   return results.find((item) => resultMatchesLicenceNumber(item, licenceNumber)) || results[0];
+}
+
+function registryLicenceNumberFromResult(result?: ResultItem) {
+  if (!result) return undefined;
+  const fromClass = result.licenceClass?.match(/(?:CPSO|Licence|License|Registration)\s*(?:#|Number|No\.?)?\s*:?\s*([A-Z0-9-]+)/i)?.[1];
+  const fromUrl = result.profileUrl?.match(/(?:cpsonum|LicenceNumber)=0*([A-Z0-9-]+)/i)?.[1];
+  return result.registrationNumber || result.cpsoNumber || fromClass || fromUrl;
+}
+
+function requiresManualRegistryReview(item: Pick<BulkResultItem, "institution" | "outcome">) {
+  return !item.institution || item.outcome === "skipped" || item.institution === "cpssk" || item.institution === "cmq" || item.institution === "cpsnb";
+}
+
+function verifiedValue(item: BulkResultItem) {
+  if (item.institution === "cpsm" && item.outcome === "not_found") {
+    return "not verified";
+  }
+
+  if (item.outcome === "needs_review" || item.outcome === "not_found" || item.outcome === "skipped" || item.outcome === "error") {
+    return "";
+  }
+
+  return isActiveStatus(item.licenceStatus) ? "verified" : "not verified";
+}
+
+function exportableResultLink(item: BulkResultItem) {
+  if (!item.sourceUrl || requiresManualRegistryReview(item)) return "";
+  if (item.institution === "cpsbc" || item.institution === "cpsm") return "";
+  return item.sourceUrl;
+}
+
+function directoryUrlForInstitution(institution?: InstitutionKey) {
+  return institution ? resolveInstitutionConfig(institution).baseUrl : "";
+}
+
+function bulkActionUrl(item: BulkResultItem) {
+  if (!item.institution) return "";
+  if (item.outcome === "not_found" || requiresManualRegistryReview(item) || item.institution === "cpsm") {
+    return directoryUrlForInstitution(item.institution);
+  }
+  return item.sourceUrl || "";
+}
+
+function bulkActionLabel(item: BulkResultItem) {
+  if (item.outcome === "not_found" || requiresManualRegistryReview(item) || item.institution === "cpsm") {
+    return "Open directory search page";
+  }
+  return "Open source result";
 }
 
 export default function Home() {
@@ -438,6 +626,13 @@ export default function Home() {
 
   const institutionConfig = resolveInstitutionConfig(institution);
   const institutionMeta = INSTITUTION_META[institution];
+  const acceptsFirstName =
+    institution !== "cpso" &&
+    institution !== "cmq" &&
+    institution !== "cpssk" &&
+    institution !== "cpsns" &&
+    institution !== "cpspei" &&
+    institution !== "cpsnl";
   const filteredInstitutions = INSTITUTIONS.filter((key) => {
     const config = resolveInstitutionConfig(key);
     const meta = INSTITUTION_META[key];
@@ -453,7 +648,7 @@ export default function Home() {
 
   async function checkRegistry() {
     const submittedTerm = searchTerm.trim();
-    const submittedGivenName = institution === "cpsbc" || institution === "cpsa" ? firstName.trim() : "";
+    const submittedGivenName = acceptsFirstName ? firstName.trim() : "";
 
     setMobileStep(3);
     setLoading(true);
@@ -503,11 +698,12 @@ export default function Home() {
     setBulkResult(null);
 
     try {
-      const records = recordsFromCsv(await file.text());
+      const uploadedRows = await recordsFromUpload(file);
+      const records = uploadedRows.records;
       const importedRows: BulkResultItem[] = [];
 
       if (records.length === 0) {
-        throw new Error("CSV has no importable rows.");
+        throw new Error("File has no importable rows.");
       }
 
       setBulkResult({
@@ -515,15 +711,16 @@ export default function Home() {
         checkedRows: 0,
         skippedRows: 0,
         limitReached: false,
+        sourceHeaders: uploadedRows.headers,
         results: [],
       });
 
       for (const [index, record] of records.entries()) {
-        const firstName = csvValue(record, ["First Name", "Given Name"]);
-        const lastName = csvValue(record, ["Last Name", "Surname"]);
-        const licensingBody = csvValue(record, ["Licensing Body", "Licence Body", "License Body", "College"]);
-        const licenceNumber = csvValue(record, ["Licence Number", "License Number", "Registration Number", "CPSO Number"]);
-        const province = csvValue(record, ["Province"]);
+        const firstName = csvValue(record.normalized, IMPORT_COLUMN_ALIASES.firstName);
+        const lastName = csvValue(record.normalized, IMPORT_COLUMN_ALIASES.lastName);
+        const licensingBody = csvValue(record.normalized, IMPORT_COLUMN_ALIASES.licensingBody);
+        const licenceNumber = csvValue(record.normalized, IMPORT_COLUMN_ALIASES.licenceNumber);
+        const province = csvValue(record.normalized, IMPORT_COLUMN_ALIASES.province);
         const detectedInstitution = detectInstitution(licensingBody, province);
         const rowNumber = index + 2;
 
@@ -534,11 +731,18 @@ export default function Home() {
             lastName,
             licensingBody,
             licenceNumber,
-            outcome: "skipped",
-            notes: "Licensing body was not recognized.",
+            sourceRecord: record.original,
+            outcome: "needs_review",
+            notes: "Licensing body is not included in PaRx yet. Review this prescriber manually.",
           });
         } else {
-          const rowSearchTerm = detectedInstitution === "cpso" ? licenceNumber || lastName : lastName;
+          const rowSearchTerm =
+            detectedInstitution === "cpso" ||
+            detectedInstitution === "cpsns" ||
+            detectedInstitution === "cpspei" ||
+            detectedInstitution === "cpsnl"
+              ? licenceNumber || lastName
+              : lastName || licenceNumber;
 
           if (!rowSearchTerm) {
             importedRows.push({
@@ -547,9 +751,16 @@ export default function Home() {
               lastName,
               licensingBody,
               licenceNumber,
+              sourceRecord: record.original,
               institution: detectedInstitution,
               outcome: "skipped",
-              notes: detectedInstitution === "cpso" ? "CPSO licence number is missing." : "Last name is missing.",
+              notes:
+                detectedInstitution === "cpso" ||
+                detectedInstitution === "cpsns" ||
+                detectedInstitution === "cpspei" ||
+                detectedInstitution === "cpsnl"
+                  ? "Licence number is missing."
+                  : "Last name is missing.",
             });
           } else {
             const response = await fetch("/api/verify-cpsbc", {
@@ -560,7 +771,16 @@ export default function Home() {
               body: JSON.stringify({
                 institution: detectedInstitution,
                 searchTerm: rowSearchTerm,
-                firstName: detectedInstitution === "cpsbc" || detectedInstitution === "cpsa" ? firstName : undefined,
+                firstName:
+                  detectedInstitution !== "cpso" &&
+                  detectedInstitution !== "cmq" &&
+                  detectedInstitution !== "cpssk" &&
+                  detectedInstitution !== "cpsns" &&
+                  detectedInstitution !== "cpspei" &&
+                  detectedInstitution !== "cpsnl"
+                    ? firstName
+                    : undefined,
+                licenceNumber,
               }),
             });
             const verification: VerifyResult = await response.json();
@@ -570,6 +790,11 @@ export default function Home() {
             }
 
             const matchedResult = pickBestResult(verification, licenceNumber);
+            const hasRegistryMatch = verification.outcome === "possible_match" || verification.outcome === "needs_review";
+            const bulkLicenceStatus =
+              detectedInstitution === "cpsm" && verification.outcome === "not_found"
+                ? "Not verified"
+                : matchedResult?.licenceStatus || verification.licenceStatus;
 
             importedRows.push({
               rowNumber,
@@ -577,11 +802,13 @@ export default function Home() {
               lastName,
               licensingBody,
               licenceNumber,
+              sourceRecord: record.original,
               institution: detectedInstitution,
               outcome: verification.outcome,
-              matchedName: matchedResult?.fullName || verification.nameFound,
-              licenceStatus: matchedResult?.licenceStatus || verification.licenceStatus,
-              licenceClass: matchedResult?.licenceClass || verification.licenceClass,
+              matchedName: hasRegistryMatch ? matchedResult?.fullName || verification.nameFound : undefined,
+              resultLicenceNumber: hasRegistryMatch ? registryLicenceNumberFromResult(matchedResult) : undefined,
+              licenceStatus: bulkLicenceStatus,
+              licenceClass: hasRegistryMatch ? matchedResult?.licenceClass || verification.licenceClass : undefined,
               sourceUrl: matchedResult?.profileUrl || verification.sourceUrl,
               notes: verification.notes,
             });
@@ -593,13 +820,14 @@ export default function Home() {
           checkedRows: importedRows.filter((item) => item.outcome !== "skipped").length,
           skippedRows: importedRows.filter((item) => item.outcome === "skipped").length,
           limitReached: false,
+          sourceHeaders: uploadedRows.headers,
           results: [...importedRows],
         });
       }
     } catch {
       setResult({
         outcome: "error",
-        notes: "The CSV could not be imported. Please check the file and try again.",
+        notes: "The file could not be imported. Please upload a CSV or Excel file and try again.",
       });
       setBulkResult(null);
     } finally {
@@ -618,6 +846,37 @@ export default function Home() {
     } finally {
       event.target.value = "";
     }
+  }
+
+  function downloadUpdatedBulkFile() {
+    if (!bulkResult) return;
+
+    const prescriberStatusIndex = bulkResult.sourceHeaders.findIndex((header) => normalizeCsvHeader(header) === "prescriberstatus");
+    const hasPrescriberStatusColumn = prescriberStatusIndex >= 0;
+    const sourceHeaders = hasPrescriberStatusColumn
+      ? bulkResult.sourceHeaders
+      : [...bulkResult.sourceHeaders, "Prescriber Status"];
+    const outputHeaders = [...sourceHeaders, "Result Link"];
+    const rows = bulkResult.results.map((item) => {
+      const resultLink = exportableResultLink(item);
+      const sourceValues = sourceHeaders.map((header, index) => {
+        if (!hasPrescriberStatusColumn && index === sourceHeaders.length - 1) {
+          return verifiedValue(item);
+        }
+        if (hasPrescriberStatusColumn && index === prescriberStatusIndex) {
+          return verifiedValue(item);
+        }
+        return item.sourceRecord[header] || "";
+      });
+      return [
+        ...sourceValues,
+        resultLink ? { t: "s", v: resultLink, l: { Target: resultLink } } : "",
+      ];
+    });
+    const worksheet = XLSX.utils.aoa_to_sheet([outputHeaders, ...rows]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Verified Results");
+    XLSX.writeFile(workbook, "parx-verified-results.xlsx");
   }
 
   function handleBulkDrag(event: React.DragEvent<HTMLLabelElement>) {
@@ -739,13 +998,13 @@ export default function Home() {
                   <span className="min-w-0">
                     <span className="block text-xs font-black uppercase text-accent">Bulk import</span>
                     <span className="mt-1 block text-base font-black leading-tight text-ink">
-                      {bulkLoading ? "Importing CSV..." : "Drag CSV here or click to upload"}
+                      {bulkLoading ? "Importing file..." : "Drag CSV or Excel here, or click to upload"}
                     </span>
-                    <span className="mt-1 block text-xs font-bold text-ink/45">CSV files only</span>
+                    <span className="mt-1 block text-xs font-bold text-ink/45">CSV, XLSX, or XLS files</span>
                   </span>
                   <input
                     type="file"
-                    accept=".csv,text/csv"
+                    accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                     className="sr-only"
                     onChange={(event) => void importCsv(event)}
                     disabled={bulkLoading || loading}
@@ -761,7 +1020,17 @@ export default function Home() {
               </div>
             </div>
 
-            <div className={`${mobileStep === 2 ? "block" : "hidden"} space-y-5 lg:block lg:min-h-0 lg:shrink lg:overflow-y-auto lg:border-t lg:border-ink/12 lg:bg-paper lg:pt-5 lg:pr-1`}>
+            <div className={`${mobileStep === 2 ? "block" : "hidden"} lg:block lg:shrink-0`}>
+              <div className="flex items-center gap-3">
+                <span className="h-px flex-1 bg-ink/12" />
+                <span className="rounded-full border border-line bg-paper px-3 py-1 text-[11px] font-black uppercase text-ink/45">
+                  or
+                </span>
+                <span className="h-px flex-1 bg-ink/12" />
+              </div>
+            </div>
+
+            <div className={`${mobileStep === 2 ? "block" : "hidden"} space-y-5 lg:block lg:min-h-0 lg:shrink lg:overflow-y-auto lg:bg-paper lg:pr-1`}>
               <div className="flex items-center justify-between gap-3 lg:hidden">
                 <button
                   type="button"
@@ -831,7 +1100,7 @@ export default function Home() {
                 />
               </div>
 
-              {(institution === "cpsbc" || institution === "cpsa") && (
+              {acceptsFirstName && (
                 <div className="space-y-2">
                   <FieldLabel htmlFor="first-name">First name</FieldLabel>
                   <input
@@ -904,7 +1173,7 @@ export default function Home() {
                   bulkLoading ? "bg-accent" : "bg-success"
                 }`}>
                   {bulkLoading && <Spinner />}
-                  {bulkLoading ? "Checking CSV rows" : "Bulk import complete"}
+                  {bulkLoading ? "Checking file rows" : "Bulk import complete"}
                 </span>
                 <p className="text-sm font-bold text-ink/65">
                   {bulkLoading ? "Please keep this page open until all rows are checked. " : ""}
@@ -918,6 +1187,16 @@ export default function Home() {
                     style={{ width: `${bulkProgressPercent}%` }}
                   />
                 </div>
+                {!bulkLoading && bulkResult.results.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={downloadUpdatedBulkFile}
+                    className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
+                  >
+                    Download updated file
+                    <DownloadIcon />
+                  </button>
+                )}
               </div>
 
               <div className="space-y-4">
@@ -925,6 +1204,9 @@ export default function Home() {
                   const detectedRegistry = item.institution ? resolveInstitutionConfig(item.institution).label : "Unknown";
                   const inputName = [item.firstName, item.lastName].filter(Boolean).join(" ") || "Unnamed row";
                   const bulkItemKey = `${item.matchedName || inputName}-${item.rowNumber}`;
+                  const requiresManualReview = requiresManualRegistryReview(item);
+                  const isUnknownRegistry = !item.institution;
+                  const actionUrl = bulkActionUrl(item);
                   const cpsbcResultItem: ResultItem = {
                     fullName: item.matchedName || inputName,
                     licenceStatus: item.licenceStatus,
@@ -935,11 +1217,15 @@ export default function Home() {
                   return (
                     <article
                       key={`${item.rowNumber}-${item.licenceNumber}-${item.lastName}`}
-                      className="min-w-0 space-y-4 rounded-2xl border border-ink/10 bg-surface p-4 sm:rounded-[30px] sm:p-5"
+                      className={`min-w-0 space-y-4 rounded-2xl border p-4 sm:rounded-[30px] sm:p-5 ${
+                        requiresManualReview
+                          ? "border-warning/35 bg-warning/10 ring-2 ring-warning/10"
+                          : "border-ink/10 bg-surface"
+                      }`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-xs font-black uppercase text-ink/45">CSV row {item.rowNumber}</p>
+                          <p className="text-xs font-black uppercase text-ink/45">File row {item.rowNumber}</p>
                           <h3 className="font-heading mt-1 break-words text-xl font-black text-ink sm:text-2xl">
                             {inputName}
                           </h3>
@@ -949,22 +1235,36 @@ export default function Home() {
                         </div>
                         <div className="flex flex-wrap justify-end gap-2">
                           <BulkOutcomeBadge outcome={item.outcome} />
-                          <StatusBadge status={item.licenceStatus} />
+                          {!requiresManualReview && <StatusBadge status={item.licenceStatus} />}
                         </div>
                       </div>
 
-                      <dl className="grid gap-3 sm:grid-cols-2">
-                        <DetailBlock label="Matched name" value={item.matchedName} />
-                        <DetailBlock label="Licence number" value={item.licenceNumber} />
-                        <DetailBlock label="Current status" value={item.licenceStatus} />
-                        <DetailBlock label="Registration class" value={item.licenceClass} />
-                      </dl>
+                      {requiresManualReview ? (
+                        <div className="rounded-2xl border border-warning/25 bg-paper px-4 py-4">
+                          <p className="text-xs font-black uppercase text-warning">Manual review required</p>
+                          <p className="mt-2 text-sm font-bold leading-relaxed text-ink/70">
+                            {isUnknownRegistry
+                              ? "This licensing body is not included in PaRx yet. Review this prescriber manually using the source registry outside the app."
+                              : "This registry does not support automated verification in PaRx yet. Open the official directory and review this prescriber manually."}
+                          </p>
+                          {item.licenceNumber && (
+                            <p className="mt-3 text-sm font-black text-ink">Licence number: {item.licenceNumber}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <dl className="grid gap-3 sm:grid-cols-2">
+                          <DetailBlock label="Matched name" value={item.matchedName} />
+                          <DetailBlock label="Licence number" value={item.resultLicenceNumber} />
+                          <DetailBlock label="Current status" value={item.licenceStatus} />
+                          <DetailBlock label="Registration class" value={item.licenceClass} />
+                        </dl>
+                      )}
 
                       {item.notes && (
                         <p className="text-sm font-bold text-ink/60">{item.notes}</p>
                       )}
 
-                      {item.institution === "cpsbc" && item.lastName && (
+                      {item.institution === "cpsbc" && item.lastName && item.outcome !== "not_found" && (
                         <div className="flex flex-wrap gap-3">
                           <button
                             type="button"
@@ -993,14 +1293,18 @@ export default function Home() {
                         </div>
                       )}
 
-                      {item.sourceUrl && item.institution !== "cpsbc" && (
+                      {actionUrl && !(item.institution === "cpsbc" && item.outcome !== "not_found") && (
                         <a
-                          href={item.sourceUrl}
+                          href={actionUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-center text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
+                          className={`inline-flex w-full items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-center text-sm font-black transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto ${
+                            requiresManualReview
+                              ? "bg-warning text-white hover:bg-warning/90"
+                              : "bg-accent text-white hover:bg-accent/90"
+                          }`}
                         >
-                          Open source result
+                          {bulkActionLabel(item)}
                           <span aria-hidden="true">↗</span>
                         </a>
                       )}
@@ -1022,6 +1326,17 @@ export default function Home() {
                     {result.notes}
                   </p>
                 )}
+                {result.outcome === "not_found" && (
+                  <a
+                    href={institutionConfig.baseUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-center text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
+                  >
+                    Open directory search page
+                    <span aria-hidden="true">↗</span>
+                  </a>
+                )}
               </div>
 
               {result.results && result.results.length > 0 && (
@@ -1030,7 +1345,7 @@ export default function Home() {
                     const recordLabel =
                       institutionConfig.label === "CPSO" && item.cpsoNumber
                         ? `CPSO #: ${item.cpsoNumber}`
-                        : institutionConfig.label === "CPSA" && item.registrationNumber
+                        : item.registrationNumber
                           ? `Registration #: ${item.registrationNumber}`
                           : `${institutionConfig.label} directory record`;
 
@@ -1103,7 +1418,9 @@ export default function Home() {
                             rel="noreferrer"
                             className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-center text-sm font-black text-white transition hover:bg-accent/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-auto"
                           >
-                            Open {institutionConfig.label} result page
+                            {institutionConfig.key === "cpsm"
+                              ? "Open directory search page"
+                              : `Open ${institutionConfig.label} result page`}
                             <span aria-hidden="true">↗</span>
                           </a>
                         )}
