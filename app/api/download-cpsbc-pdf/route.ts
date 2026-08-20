@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { launchBrowser } from "@/lib/cpsbcAdapter";
+import { launchBrowser, releaseBrowser } from "@/lib/cpsbcAdapter";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -94,6 +94,6 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   } finally {
-    await browser.close();
+    await releaseBrowser(browser, page);
   }
 }

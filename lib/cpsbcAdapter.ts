@@ -37,6 +37,7 @@ type CpsbcResult = {
 type RegistryResult = NonNullable<CpsbcResult["results"]>[number];
 
 const MAX_RESULT_PAGES = 25;
+let serverlessBrowserPromise: Promise<Browser> | undefined;
 
 function isServerlessRuntime() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -78,17 +79,44 @@ async function cleanupPlaywrightTempProfiles() {
 
 export async function launchBrowser(): Promise<Browser> {
   if (isServerlessRuntime()) {
-    await cleanupPlaywrightTempProfiles();
+    if (serverlessBrowserPromise) {
+      const existingBrowser = await serverlessBrowserPromise.catch(() => undefined);
+      if (existingBrowser?.isConnected()) return existingBrowser;
+      serverlessBrowserPromise = undefined;
+    }
 
-    return playwrightCoreChromium.launch({
-      args: serverlessChromium.args,
-      executablePath: await serverlessChromium.executablePath(),
-      headless: true,
+    serverlessBrowserPromise = (async () => {
+      await cleanupPlaywrightTempProfiles();
+
+      const browser = await playwrightCoreChromium.launch({
+        args: serverlessChromium.args,
+        executablePath: await serverlessChromium.executablePath(),
+        headless: true,
+      });
+
+      browser.on("disconnected", () => {
+        serverlessBrowserPromise = undefined;
+      });
+
+      return browser;
+    })();
+
+    return serverlessBrowserPromise.catch((error) => {
+      serverlessBrowserPromise = undefined;
+      throw error;
     });
   }
 
   const { chromium } = await import("playwright");
   return chromium.launch({ headless: true });
+}
+
+export async function releaseBrowser(browser: Browser, page?: Page) {
+  await page?.close().catch(() => undefined);
+
+  if (isServerlessRuntime()) return;
+
+  await browser.close().catch(() => undefined);
 }
 
 export function resolveCpssoSearchUrl(searchTerm: string) {
@@ -1247,7 +1275,6 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
       notes: userSafeErrorMessage(error),
     };
   } finally {
-    await browser.close().catch(() => undefined);
-    await cleanupPlaywrightTempProfiles();
+    await releaseBrowser(browser, page);
   }
 }
