@@ -17,6 +17,8 @@ const INSTITUTIONS: InstitutionKey[] = [
   "cpsnl",
 ];
 
+const CPSBC_BULK_DELAY_MS = 4000;
+
 const INSTITUTION_META: Record<
   InstitutionKey,
   { fullName: string; province: string; searchBy: string }
@@ -574,6 +576,10 @@ function rowErrorMessage(error: unknown) {
   return firstLine || "Verification failed for this row.";
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function readVerifyResponse(response: Response) {
   const contentType = response.headers.get("content-type") || "";
 
@@ -787,6 +793,10 @@ export default function Home() {
             });
           } else {
             try {
+              if (detectedInstitution === "cpsbc") {
+                await wait(CPSBC_BULK_DELAY_MS);
+              }
+
               const response = await fetch("/api/verify-cpsbc", {
                 method: "POST",
                 headers: {

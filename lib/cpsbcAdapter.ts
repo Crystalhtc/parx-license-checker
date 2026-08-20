@@ -37,6 +37,10 @@ type CpsbcResult = {
 type RegistryResult = NonNullable<CpsbcResult["results"]>[number];
 
 const MAX_RESULT_PAGES = 25;
+export const ACTION_TIMEOUT_MS = 45000;
+export const NAVIGATION_TIMEOUT_MS = 60000;
+const SHORT_UI_TIMEOUT_MS = 10000;
+export const RESULTS_SETTLE_TIMEOUT_MS = 45000;
 
 function isServerlessRuntime() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -55,6 +59,15 @@ function userSafeErrorMessage(error: unknown) {
   }
 
   return firstLine || "Unknown error";
+}
+
+function isTransientVerificationFailure(result: CpsbcResult) {
+  return (
+    result.outcome === "error" &&
+    /timeout|timed out|browser session closed|target page|context or browser has been closed|err_insufficient_resources/i.test(
+      result.notes || ""
+    )
+  );
 }
 
 async function cleanupPlaywrightTempProfiles() {
@@ -95,6 +108,8 @@ export async function createBrowserPage(options?: BrowserContextOptions) {
   const browser = await launchBrowser();
   const context = await browser.newContext(options);
   const page = await context.newPage();
+  page.setDefaultTimeout(ACTION_TIMEOUT_MS);
+  page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 
   return { browser, context, page };
 }
@@ -834,11 +849,11 @@ async function enrichCpsmResultsOnCurrentPage(page: Page, results: RegistryResul
     await page.locator(".listingCore tbody tr").nth(result.rowIndex).click();
     await page
       .waitForFunction(() => /Registration Number|Membership Class/i.test(document.body?.innerText || ""), undefined, {
-        timeout: 10000,
+        timeout: SHORT_UI_TIMEOUT_MS,
       })
       .catch(() => undefined);
     const modal = page.locator(".custom-modal-body").filter({ hasText: /Registration Number/i }).first();
-    await modal.waitFor({ state: "visible", timeout: 10000 }).catch(() => undefined);
+    await modal.waitFor({ state: "visible", timeout: SHORT_UI_TIMEOUT_MS }).catch(() => undefined);
     const modalText = await modal.innerText().catch(() => "");
     const parsed = parseCpsmModalText(modalText);
 
@@ -870,17 +885,17 @@ async function waitForResultsPage(page: Page, institutionKey: string, previousRe
             return tableText.replace(/\s+/g, " ").trim() !== previousText;
           },
           previousResultsText,
-          { timeout: 20000 }
+          { timeout: RESULTS_SETTLE_TIMEOUT_MS }
         )
         .catch(() => undefined);
     }
 
-    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+    await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
     return;
   }
 
-  await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => undefined);
-  await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+  await page.waitForLoadState("domcontentloaded", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
+  await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
 }
 
 async function collectPaginatedResults(
@@ -935,7 +950,7 @@ async function collectPaginatedResults(
   };
 }
 
-export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
+async function verifyCpsbcOnce(input: CpsbcInput): Promise<CpsbcResult> {
   const searchTerm = (input.searchTerm || input.lastName || input.city || "").trim();
   const firstName = (input.firstName || "").trim();
   const licenceNumber = (input.licenceNumber || "").trim();
@@ -998,7 +1013,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
 
       if (institutionConfig.key === "cpso") {
         const searchInput = page.getByRole("textbox", { name: "CPSO #:", exact: true });
-        await searchInput.waitFor({ state: "visible", timeout: 15000 });
+        await searchInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
         await searchInput.click();
         await searchInput.fill(searchTerm);
 
@@ -1006,13 +1021,13 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await submitButton.click();
       } else if (institutionConfig.key === "cpsa") {
         const lastNameInput = page.getByRole("searchbox", { name: "Last Name" });
-        await lastNameInput.waitFor({ state: "visible", timeout: 15000 });
+        await lastNameInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
         await lastNameInput.click();
         await lastNameInput.fill(searchTerm);
 
         if (firstName) {
           const firstNameInput = page.getByRole("searchbox", { name: "First Name" });
-          await firstNameInput.waitFor({ state: "visible", timeout: 15000 });
+          await firstNameInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
           await firstNameInput.click();
           await firstNameInput.fill(firstName);
         }
@@ -1021,7 +1036,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await submitButton.click();
       } else if (institutionConfig.key === "cpsm") {
         const inputs = page.locator("input.form-control");
-        await inputs.nth(0).waitFor({ state: "visible", timeout: 15000 });
+        await inputs.nth(0).waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
         await inputs.nth(0).fill(searchTerm);
         if (firstName) {
           await inputs.nth(1).fill(firstName);
@@ -1038,7 +1053,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await page.locator(".als-search-button").click();
       } else {
         const lastNameInput = page.getByRole("textbox", { name: "Licensee Last Name" });
-        await lastNameInput.waitFor({ state: "visible", timeout: 15000 });
+        await lastNameInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
         await lastNameInput.click();
         await lastNameInput.fill(searchTerm);
 
@@ -1046,10 +1061,10 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await submitButton.click();
 
         if (firstName) {
-          await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+          await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
 
           const firstNameInput = page.getByRole("textbox", { name: "Licensee First Name" });
-          await firstNameInput.waitFor({ state: "visible", timeout: 15000 });
+          await firstNameInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
           await firstNameInput.click();
           await firstNameInput.fill(firstName);
 
@@ -1065,7 +1080,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
       // that in-flight postback and reproducibly corrupts the search (the
       // server ends up returning 0 matches for a real, existing physician).
       // Waiting for the network to settle avoids the interference.
-      await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+      await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
       await page.waitForTimeout(1500).catch(() => undefined);
     } else {
       await page.waitForFunction(
@@ -1125,7 +1140,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
 
         await page.goto(result.profileUrl, { waitUntil: "domcontentloaded" });
         await page
-          .waitForFunction(() => /Membership Status/i.test(document.body?.innerText || ""), { timeout: 30000 })
+          .waitForFunction(() => /Membership Status/i.test(document.body?.innerText || ""), { timeout: ACTION_TIMEOUT_MS })
           .catch(() => undefined);
         const profileBodyText = (await page.locator("body").innerText()).trim();
         const enriched = parseCpsaProfilePage({
@@ -1152,7 +1167,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await page.goto(result.profileUrl, { waitUntil: "domcontentloaded" });
         await page
           .waitForFunction(() => /Registrant Details|Licence No:/i.test(document.body?.innerText || ""), undefined, {
-            timeout: 30000,
+            timeout: ACTION_TIMEOUT_MS,
           })
           .catch(() => undefined);
         const enriched = await parseCpsnsDetailPage(page, result);
@@ -1179,7 +1194,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await page.goto(result.profileUrl, { waitUntil: "domcontentloaded" });
         await page
           .waitForFunction(() => /Current Registration|Expiry/i.test(document.body?.innerText || ""), undefined, {
-            timeout: 30000,
+            timeout: ACTION_TIMEOUT_MS,
           })
           .catch(() => undefined);
         const enriched = await parseCpspeiDetailPage(page, result);
@@ -1205,7 +1220,7 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
         await page.goto(result.profileUrl, { waitUntil: "domcontentloaded" });
         await page
           .waitForFunction(() => /Registration History|Expiry/i.test(document.body?.innerText || ""), undefined, {
-            timeout: 30000,
+            timeout: ACTION_TIMEOUT_MS,
           })
           .catch(() => undefined);
         const enriched = await parseCpsnlDetailPage(page, result);
@@ -1273,4 +1288,24 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
   } finally {
     await releaseBrowser(browser, page, context);
   }
+}
+
+export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
+  const firstAttempt = await verifyCpsbcOnce(input);
+  if (!isTransientVerificationFailure(firstAttempt)) return firstAttempt;
+
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const retryAttempt = await verifyCpsbcOnce(input);
+
+  if (!isTransientVerificationFailure(retryAttempt)) {
+    return {
+      ...retryAttempt,
+      notes: retryAttempt.notes ? `${retryAttempt.notes} Retried once after a slow registry response.` : retryAttempt.notes,
+    };
+  }
+
+  return {
+    ...retryAttempt,
+    notes: `${retryAttempt.notes || "Verification timed out."} Retried once, but the registry still did not respond in time.`,
+  };
 }

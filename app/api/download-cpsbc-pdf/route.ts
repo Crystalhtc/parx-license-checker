@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createBrowserPage, releaseBrowser } from "@/lib/cpsbcAdapter";
+import { ACTION_TIMEOUT_MS, RESULTS_SETTLE_TIMEOUT_MS, createBrowserPage, releaseBrowser } from "@/lib/cpsbcAdapter";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -34,19 +34,19 @@ export async function POST(request: NextRequest) {
     await page.goto("https://www.cpsbc.ca/directory", { waitUntil: "domcontentloaded" });
 
     const searchInput = page.getByRole("textbox", { name: "Licensee Last Name" });
-    await searchInput.waitFor({ state: "visible", timeout: 15000 });
+    await searchInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
     await searchInput.click();
     await searchInput.fill(searchTerm);
     await searchInput.press("Enter");
-    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+    await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
 
     if (firstName) {
       const firstNameInput = page.getByRole("textbox", { name: "Licensee First Name" });
-      await firstNameInput.waitFor({ state: "visible", timeout: 15000 });
+      await firstNameInput.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
       await firstNameInput.click();
       await firstNameInput.fill(firstName);
       await page.getByRole("button", { name: "Search", exact: true }).click();
-      await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+      await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
     }
 
     const escapedFullName = fullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -57,11 +57,11 @@ export async function POST(request: NextRequest) {
           .first()
       : page.locator("h5 a, a[href]").first();
 
-    await resultLink.waitFor({ state: "visible", timeout: 15000 });
+    await resultLink.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
     await resultLink.click();
-    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => undefined);
+    await page.waitForLoadState("networkidle", { timeout: RESULTS_SETTLE_TIMEOUT_MS }).catch(() => undefined);
 
-    const downloadPromise = page.waitForEvent("download", { timeout: 30000 });
+    const downloadPromise = page.waitForEvent("download", { timeout: ACTION_TIMEOUT_MS });
     await page.getByRole("link", { name: /save results as pdf/i }).click();
 
     const download = await downloadPromise;
