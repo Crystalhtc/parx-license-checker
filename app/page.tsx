@@ -568,6 +568,12 @@ function registryLicenceNumberFromResult(result?: ResultItem) {
   return result.registrationNumber || result.cpsoNumber || fromClass || fromUrl;
 }
 
+function rowErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "Verification failed for this row.";
+  const firstLine = message.split("\n")[0]?.trim();
+  return firstLine || "Verification failed for this row.";
+}
+
 function requiresManualRegistryReview(item: Pick<BulkResultItem, "institution" | "outcome">) {
   return !item.institution || item.outcome === "skipped" || item.institution === "cpssk" || item.institution === "cmq" || item.institution === "cpsnb";
 }
@@ -763,55 +769,72 @@ export default function Home() {
                   : "Last name is missing.",
             });
           } else {
-            const response = await fetch("/api/verify-cpsbc", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                institution: detectedInstitution,
-                searchTerm: rowSearchTerm,
-                firstName:
-                  detectedInstitution !== "cpso" &&
-                  detectedInstitution !== "cmq" &&
-                  detectedInstitution !== "cpssk" &&
-                  detectedInstitution !== "cpsns" &&
-                  detectedInstitution !== "cpspei" &&
-                  detectedInstitution !== "cpsnl"
-                    ? firstName
-                    : undefined,
+            try {
+              const response = await fetch("/api/verify-cpsbc", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  institution: detectedInstitution,
+                  searchTerm: rowSearchTerm,
+                  firstName:
+                    detectedInstitution !== "cpso" &&
+                    detectedInstitution !== "cmq" &&
+                    detectedInstitution !== "cpssk" &&
+                    detectedInstitution !== "cpsns" &&
+                    detectedInstitution !== "cpspei" &&
+                    detectedInstitution !== "cpsnl"
+                      ? firstName
+                      : undefined,
+                  licenceNumber,
+                }),
+              });
+              const verification = (await response.json().catch(() => ({
+                outcome: "error",
+                notes: "Verification failed for this row.",
+              }))) as VerifyResult;
+
+              if (!response.ok) {
+                throw new Error(verification.notes || "Verification failed for this row.");
+              }
+
+              const matchedResult = pickBestResult(verification, licenceNumber);
+              const hasRegistryMatch = verification.outcome === "possible_match" || verification.outcome === "needs_review";
+              const bulkLicenceStatus =
+                detectedInstitution === "cpsm" && verification.outcome === "not_found"
+                  ? "Not verified"
+                  : matchedResult?.licenceStatus || verification.licenceStatus;
+
+              importedRows.push({
+                rowNumber,
+                firstName,
+                lastName,
+                licensingBody,
                 licenceNumber,
-              }),
-            });
-            const verification: VerifyResult = await response.json();
-
-            if (!response.ok) {
-              throw new Error(verification.notes || "Verification failed.");
+                sourceRecord: record.original,
+                institution: detectedInstitution,
+                outcome: verification.outcome,
+                matchedName: hasRegistryMatch ? matchedResult?.fullName || verification.nameFound : undefined,
+                resultLicenceNumber: hasRegistryMatch ? registryLicenceNumberFromResult(matchedResult) : undefined,
+                licenceStatus: bulkLicenceStatus,
+                licenceClass: hasRegistryMatch ? matchedResult?.licenceClass || verification.licenceClass : undefined,
+                sourceUrl: matchedResult?.profileUrl || verification.sourceUrl,
+                notes: verification.notes,
+              });
+            } catch (error) {
+              importedRows.push({
+                rowNumber,
+                firstName,
+                lastName,
+                licensingBody,
+                licenceNumber,
+                sourceRecord: record.original,
+                institution: detectedInstitution,
+                outcome: "error",
+                notes: rowErrorMessage(error),
+              });
             }
-
-            const matchedResult = pickBestResult(verification, licenceNumber);
-            const hasRegistryMatch = verification.outcome === "possible_match" || verification.outcome === "needs_review";
-            const bulkLicenceStatus =
-              detectedInstitution === "cpsm" && verification.outcome === "not_found"
-                ? "Not verified"
-                : matchedResult?.licenceStatus || verification.licenceStatus;
-
-            importedRows.push({
-              rowNumber,
-              firstName,
-              lastName,
-              licensingBody,
-              licenceNumber,
-              sourceRecord: record.original,
-              institution: detectedInstitution,
-              outcome: verification.outcome,
-              matchedName: hasRegistryMatch ? matchedResult?.fullName || verification.nameFound : undefined,
-              resultLicenceNumber: hasRegistryMatch ? registryLicenceNumberFromResult(matchedResult) : undefined,
-              licenceStatus: bulkLicenceStatus,
-              licenceClass: hasRegistryMatch ? matchedResult?.licenceClass || verification.licenceClass : undefined,
-              sourceUrl: matchedResult?.profileUrl || verification.sourceUrl,
-              notes: verification.notes,
-            });
           }
         }
 

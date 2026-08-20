@@ -1,4 +1,7 @@
 import serverlessChromium from "@sparticuz/chromium";
+import { readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium as playwrightCoreChromium, type Browser, type Page } from "playwright-core";
 import { resolveInstitutionConfig } from "./institutionConfig";
 
@@ -39,8 +42,44 @@ function isServerlessRuntime() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 }
 
+function userSafeErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "Unknown error";
+  const firstLine = message.split("\n")[0]?.trim();
+
+  if (/Target page, context or browser has been closed/i.test(message)) {
+    return "The registry browser session closed before this check finished. Please retry, or run a smaller bulk file if this keeps happening.";
+  }
+
+  if (/Less than 64MB of free space in temporary directory/i.test(message)) {
+    return "The verification server ran out of temporary browser storage while checking this registry. Please retry with a smaller batch.";
+  }
+
+  return firstLine || "Unknown error";
+}
+
+async function cleanupPlaywrightTempProfiles() {
+  if (!isServerlessRuntime()) return;
+
+  const temporaryDirectory = tmpdir();
+  const entries = await readdir(temporaryDirectory).catch(() => []);
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.startsWith("playwright_") || entry.startsWith("playwright-"))
+      .map((entry) =>
+        rm(join(temporaryDirectory, entry), {
+          recursive: true,
+          force: true,
+          maxRetries: 1,
+        }).catch(() => undefined)
+      )
+  );
+}
+
 export async function launchBrowser(): Promise<Browser> {
   if (isServerlessRuntime()) {
+    await cleanupPlaywrightTempProfiles();
+
     return playwrightCoreChromium.launch({
       args: serverlessChromium.args,
       executablePath: await serverlessChromium.executablePath(),
@@ -1205,9 +1244,10 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
   } catch (error) {
     return {
       outcome: "error",
-      notes: error instanceof Error ? error.message : "Unknown error",
+      notes: userSafeErrorMessage(error),
     };
   } finally {
-    await browser.close();
+    await browser.close().catch(() => undefined);
+    await cleanupPlaywrightTempProfiles();
   }
 }
