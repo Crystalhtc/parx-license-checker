@@ -2,7 +2,7 @@ import serverlessChromium from "@sparticuz/chromium";
 import { readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium as playwrightCoreChromium, type Browser, type Page } from "playwright-core";
+import { chromium as playwrightCoreChromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
 import { resolveInstitutionConfig } from "./institutionConfig";
 
 type CpsbcInput = {
@@ -37,7 +37,9 @@ type CpsbcResult = {
 type RegistryResult = NonNullable<CpsbcResult["results"]>[number];
 
 const MAX_RESULT_PAGES = 25;
+const SERVERLESS_BROWSER_RECYCLE_AFTER_CHECKS = 6;
 let serverlessBrowserPromise: Promise<Browser> | undefined;
+let serverlessBrowserChecks = 0;
 
 function isServerlessRuntime() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -47,7 +49,7 @@ function userSafeErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Unknown error";
   const firstLine = message.split("\n")[0]?.trim();
 
-  if (/Target page, context or browser has been closed/i.test(message)) {
+  if (/Target page, context or browser has been closed|ERR_INSUFFICIENT_RESOURCES/i.test(message)) {
     return "The registry browser session closed before this check finished. Please retry, or run a smaller bulk file if this keeps happening.";
   }
 
@@ -56,6 +58,11 @@ function userSafeErrorMessage(error: unknown) {
   }
 
   return firstLine || "Unknown error";
+}
+
+function isBrowserResourceError(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  return /Target page, context or browser has been closed|ERR_INSUFFICIENT_RESOURCES|Less than 64MB of free space/i.test(message);
 }
 
 async function cleanupPlaywrightTempProfiles() {
@@ -96,6 +103,7 @@ export async function launchBrowser(): Promise<Browser> {
 
       browser.on("disconnected", () => {
         serverlessBrowserPromise = undefined;
+        serverlessBrowserChecks = 0;
       });
 
       return browser;
@@ -111,10 +119,35 @@ export async function launchBrowser(): Promise<Browser> {
   return chromium.launch({ headless: true });
 }
 
-export async function releaseBrowser(browser: Browser, page?: Page) {
-  await page?.close().catch(() => undefined);
+export async function createBrowserPage(options?: BrowserContextOptions) {
+  const browser = await launchBrowser();
+  const context = await browser.newContext(options);
+  const page = await context.newPage();
 
-  if (isServerlessRuntime()) return;
+  return { browser, context, page };
+}
+
+export async function releaseBrowser(
+  browser: Browser,
+  page?: Page,
+  context?: BrowserContext,
+  options?: { forceClose?: boolean }
+) {
+  await page?.close().catch(() => undefined);
+  await context?.close().catch(() => undefined);
+
+  if (isServerlessRuntime()) {
+    serverlessBrowserChecks += 1;
+
+    if (options?.forceClose || serverlessBrowserChecks >= SERVERLESS_BROWSER_RECYCLE_AFTER_CHECKS) {
+      serverlessBrowserPromise = undefined;
+      serverlessBrowserChecks = 0;
+      await browser.close().catch(() => undefined);
+      await cleanupPlaywrightTempProfiles();
+    }
+
+    return;
+  }
 
   await browser.close().catch(() => undefined);
 }
@@ -986,8 +1019,8 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
     };
   }
 
-  const browser = await launchBrowser();
-  const page = await browser.newPage();
+  const { browser, context, page } = await createBrowserPage();
+  let forceBrowserRecycle = false;
 
   try {
     if (institutionConfig.key === "cpso" && /^\d+$/.test(searchTerm)) {
@@ -1270,11 +1303,12 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
       results: normalizedResults,
     };
   } catch (error) {
+    forceBrowserRecycle = isBrowserResourceError(error);
     return {
       outcome: "error",
       notes: userSafeErrorMessage(error),
     };
   } finally {
-    await releaseBrowser(browser, page);
+    await releaseBrowser(browser, page, context, { forceClose: forceBrowserRecycle });
   }
 }

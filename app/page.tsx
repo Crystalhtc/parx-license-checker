@@ -574,6 +574,23 @@ function rowErrorMessage(error: unknown) {
   return firstLine || "Verification failed for this row.";
 }
 
+async function readVerifyResponse(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return (await response.json().catch(() => ({
+      outcome: "error",
+      notes: "Verification failed for this row.",
+    }))) as VerifyResult;
+  }
+
+  const text = await response.text().catch(() => "");
+  return {
+    outcome: "error",
+    notes: text.trim() || `Verification service returned HTTP ${response.status}.`,
+  } as VerifyResult;
+}
+
 function requiresManualRegistryReview(item: Pick<BulkResultItem, "institution" | "outcome">) {
   return !item.institution || item.outcome === "skipped" || item.institution === "cpssk" || item.institution === "cmq" || item.institution === "cpsnb";
 }
@@ -790,13 +807,10 @@ export default function Home() {
                   licenceNumber,
                 }),
               });
-              const verification = (await response.json().catch(() => ({
-                outcome: "error",
-                notes: "Verification failed for this row.",
-              }))) as VerifyResult;
+              const verification = await readVerifyResponse(response);
 
               if (!response.ok) {
-                throw new Error(verification.notes || "Verification failed for this row.");
+                throw new Error(verification.notes || `Verification service returned HTTP ${response.status}.`);
               }
 
               const matchedResult = pickBestResult(verification, licenceNumber);
