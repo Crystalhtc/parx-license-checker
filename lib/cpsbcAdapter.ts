@@ -37,9 +37,6 @@ type CpsbcResult = {
 type RegistryResult = NonNullable<CpsbcResult["results"]>[number];
 
 const MAX_RESULT_PAGES = 25;
-const SERVERLESS_BROWSER_RECYCLE_AFTER_CHECKS = 6;
-let serverlessBrowserPromise: Promise<Browser> | undefined;
-let serverlessBrowserChecks = 0;
 
 function isServerlessRuntime() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -58,11 +55,6 @@ function userSafeErrorMessage(error: unknown) {
   }
 
   return firstLine || "Unknown error";
-}
-
-function isBrowserResourceError(error: unknown) {
-  const message = error instanceof Error ? error.message : "";
-  return /Target page, context or browser has been closed|ERR_INSUFFICIENT_RESOURCES|Less than 64MB of free space/i.test(message);
 }
 
 async function cleanupPlaywrightTempProfiles() {
@@ -86,32 +78,12 @@ async function cleanupPlaywrightTempProfiles() {
 
 export async function launchBrowser(): Promise<Browser> {
   if (isServerlessRuntime()) {
-    if (serverlessBrowserPromise) {
-      const existingBrowser = await serverlessBrowserPromise.catch(() => undefined);
-      if (existingBrowser?.isConnected()) return existingBrowser;
-      serverlessBrowserPromise = undefined;
-    }
+    await cleanupPlaywrightTempProfiles();
 
-    serverlessBrowserPromise = (async () => {
-      await cleanupPlaywrightTempProfiles();
-
-      const browser = await playwrightCoreChromium.launch({
-        args: serverlessChromium.args,
-        executablePath: await serverlessChromium.executablePath(),
-        headless: true,
-      });
-
-      browser.on("disconnected", () => {
-        serverlessBrowserPromise = undefined;
-        serverlessBrowserChecks = 0;
-      });
-
-      return browser;
-    })();
-
-    return serverlessBrowserPromise.catch((error) => {
-      serverlessBrowserPromise = undefined;
-      throw error;
+    return playwrightCoreChromium.launch({
+      args: serverlessChromium.args,
+      executablePath: await serverlessChromium.executablePath(),
+      headless: true,
     });
   }
 
@@ -130,22 +102,14 @@ export async function createBrowserPage(options?: BrowserContextOptions) {
 export async function releaseBrowser(
   browser: Browser,
   page?: Page,
-  context?: BrowserContext,
-  options?: { forceClose?: boolean }
+  context?: BrowserContext
 ) {
   await page?.close().catch(() => undefined);
   await context?.close().catch(() => undefined);
 
   if (isServerlessRuntime()) {
-    serverlessBrowserChecks += 1;
-
-    if (options?.forceClose || serverlessBrowserChecks >= SERVERLESS_BROWSER_RECYCLE_AFTER_CHECKS) {
-      serverlessBrowserPromise = undefined;
-      serverlessBrowserChecks = 0;
-      await browser.close().catch(() => undefined);
-      await cleanupPlaywrightTempProfiles();
-    }
-
+    await browser.close().catch(() => undefined);
+    await cleanupPlaywrightTempProfiles();
     return;
   }
 
@@ -1020,7 +984,6 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
   }
 
   const { browser, context, page } = await createBrowserPage();
-  let forceBrowserRecycle = false;
 
   try {
     if (institutionConfig.key === "cpso" && /^\d+$/.test(searchTerm)) {
@@ -1303,12 +1266,11 @@ export async function verifyCpsbc(input: CpsbcInput): Promise<CpsbcResult> {
       results: normalizedResults,
     };
   } catch (error) {
-    forceBrowserRecycle = isBrowserResourceError(error);
     return {
       outcome: "error",
       notes: userSafeErrorMessage(error),
     };
   } finally {
-    await releaseBrowser(browser, page, context, { forceClose: forceBrowserRecycle });
+    await releaseBrowser(browser, page, context);
   }
 }

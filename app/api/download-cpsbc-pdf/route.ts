@@ -29,7 +29,6 @@ export async function POST(request: NextRequest) {
   }
 
   const { browser, context, page } = await createBrowserPage({ acceptDownloads: true });
-  let forceBrowserRecycle = false;
 
   try {
     await page.goto("https://www.cpsbc.ca/directory", { waitUntil: "domcontentloaded" });
@@ -85,8 +84,6 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    forceBrowserRecycle = /Target page, context or browser has been closed|ERR_INSUFFICIENT_RESOURCES|Less than 64MB of free space/i.test(message);
     console.error("CPSBC PDF download failed", error);
 
     return NextResponse.json(
@@ -96,6 +93,6 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   } finally {
-    await releaseBrowser(browser, page, context, { forceClose: forceBrowserRecycle });
+    await releaseBrowser(browser, page, context);
   }
 }
